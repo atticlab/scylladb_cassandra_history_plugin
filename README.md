@@ -17,7 +17,7 @@ add_subdirectory(login_plugin)
 add_subdirectory(cassandra_history_plugin) # add this line.
 ...
 ```
-3. Add following line to `programs/nodeos/CMakeLists.txt`.
+3. Add the following line to `programs/nodeos/CMakeLists.txt`.
 
 ```cmake
 target_link_libraries( ${NODE_EXECUTABLE_NAME}
@@ -43,7 +43,7 @@ $ sudo dpkg -i cassandra-cpp-driver-dev_2.11.0-1_amd64.deb
 ```sh
 $ ./eosio_build.sh -s EOS
 ```
-## Congigure nodeos (add following to config.ini). 
+## Configure nodeos (add the following to config.ini). 
 ```plain
 ....
 abi-serializer-max-time-ms = 1000000
@@ -99,7 +99,7 @@ CREATE INDEX ON eos_history.account_public_key (key);
 CREATE TABLE account_controlling_account (name text, controlling_name text, permission text, PRIMARY KEY(name, permission));
 CREATE INDEX ON eos_history.account_controlling_account (controlling_name);
 ```  
-2. Create keyspace and tables from file in cqlsh.  
+2. Create keyspace and tables from the file in cqlsh.  
 ```sh
 $ cqlsh
 cqlsh> CREATE KEYSPACE eos_history WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 } ;   
@@ -108,7 +108,7 @@ cqlsh> SOURCE 'cmd.cqlsh'
 
 ## Start nodeos
 
-1. In first time. 
+1. For the first time. 
 ```sh
 $ /nodeos_bin_dir/nodeos --delete-all-blocks --genesis-json genesis.json
 ```  
