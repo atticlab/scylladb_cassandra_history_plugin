@@ -20,6 +20,7 @@ namespace eosio
         upsert_account,
         insert_account_action_trace,
         insert_account_action_trace_shard,
+        insert_date_action_trace,
         insert_action_trace,
         insert_block,
         insert_transaction,
@@ -70,12 +71,36 @@ namespace eosio
         chain::account_name account;
         int64_t shardId;
     };
+    class insert_date_action_trace_object : public chainbase::object<cass_query_object_type::insert_date_action_trace, insert_date_action_trace_object> {
+        OBJECT_CTOR(insert_date_action_trace_object,(globalSeq)(parent))
+
+        id_type id;
+        chain::shared_blob globalSeq;
+        fc::time_point blockTime;
+        chain::shared_blob parent;
+
+        void setGlobalSeq(const std::vector<cass_byte_t>& gs)
+        {
+            globalSeq.resize( gs.size() );
+            for (int i = 0; i < gs.size(); i++)
+            {
+                globalSeq[i] = gs[i];
+            }
+        }
+        void setParent(const std::vector<cass_byte_t>& p)
+        {
+            parent.resize( p.size() );
+            for (int i = 0; i < p.size(); i++)
+            {
+                parent[i] = p[i];
+            }
+        }
+    };
     class insert_action_trace_object : public chainbase::object<cass_query_object_type::insert_action_trace, insert_action_trace_object> {
         OBJECT_CTOR(insert_action_trace_object,(globalSeq)(actionTrace)(parent))
 
         id_type id;
         chain::shared_blob globalSeq;
-        fc::time_point blockTime;
         chain::shared_blob actionTrace;
         chain::shared_blob parent;
 
@@ -185,6 +210,14 @@ namespace eosio
         >
     >;
     typedef chainbase::generic_index<insert_account_action_trace_shard_multi_index> insert_account_action_trace_shard_index;
+
+    using insert_date_action_trace_multi_index = chainbase::shared_multi_index_container<
+        insert_date_action_trace_object,
+        indexed_by<
+            ordered_unique<tag<by_id>, BOOST_MULTI_INDEX_MEMBER(insert_date_action_trace_object, insert_date_action_trace_object::id_type, id)>
+        >
+    >;
+    typedef chainbase::generic_index<insert_date_action_trace_multi_index> insert_date_action_trace_index;
     
     using insert_action_trace_multi_index = chainbase::shared_multi_index_container<
         insert_action_trace_object,
@@ -223,6 +256,7 @@ namespace eosio
 CHAINBASE_SET_INDEX_TYPE( eosio::upsert_account_object,                    eosio::upsert_account_multi_index )
 CHAINBASE_SET_INDEX_TYPE( eosio::insert_account_action_trace_object,       eosio::insert_account_action_trace_multi_index )
 CHAINBASE_SET_INDEX_TYPE( eosio::insert_account_action_trace_shard_object, eosio::insert_account_action_trace_shard_multi_index )
+CHAINBASE_SET_INDEX_TYPE( eosio::insert_date_action_trace_object,          eosio::insert_date_action_trace_multi_index )
 CHAINBASE_SET_INDEX_TYPE( eosio::insert_action_trace_object,               eosio::insert_action_trace_multi_index )
 CHAINBASE_SET_INDEX_TYPE( eosio::insert_block_object,                      eosio::insert_block_multi_index )
 CHAINBASE_SET_INDEX_TYPE( eosio::insert_transaction_object,                eosio::insert_transaction_multi_index )
@@ -231,7 +265,8 @@ CHAINBASE_SET_INDEX_TYPE( eosio::insert_transaction_trace_object,          eosio
 FC_REFLECT( eosio::upsert_account_object, (name)(blockTime)(data) )
 FC_REFLECT( eosio::insert_account_action_trace_object, (account)(shardId)(globalSeq)(blockTime)(parent) )
 FC_REFLECT( eosio::insert_account_action_trace_shard_object, (account)(shardId) )
-FC_REFLECT( eosio::insert_action_trace_object, (globalSeq)(blockTime)(actionTrace)(parent) )
+FC_REFLECT( eosio::insert_date_action_trace_object, (globalSeq)(blockTime)(parent) )
+FC_REFLECT( eosio::insert_action_trace_object, (globalSeq)(actionTrace)(parent) )
 FC_REFLECT( eosio::insert_block_object, (blockId)(blockNum)(block)(irreversible) )
 FC_REFLECT( eosio::insert_transaction_object, (transactionId)(transaction) )
 FC_REFLECT( eosio::insert_transaction_trace_object, (transactionId)(blockNum)(blockTime)(transactionTrace) )

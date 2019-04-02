@@ -20,14 +20,14 @@
 class CassandraClient
 {
 public:
-    CassandraClient(const std::string& hostUrl, const std::string& keyspace, size_t replicationFactor);
+    CassandraClient(const std::string& hostUrl, const std::string& keyspace, size_t replicationFactor, bool dropKeyspace);
     ~CassandraClient();
 
     void init();
     void insertFailed();
     void prepareStatements();
 
-    void batchInsertActionTraceWithParent(
+    void batchInsertDateActionTrace(
         const std::vector<std::tuple<std::vector<cass_byte_t>, fc::time_point, std::vector<cass_byte_t>>>& data);
     void batchInsertAccountActionTrace(
         const std::vector<std::tuple<eosio::chain::account_name, int64_t, std::vector<cass_byte_t>, fc::time_point, std::vector<cass_byte_t>>>& data);
@@ -56,13 +56,15 @@ public:
     void insertAccountActionTraceShard(
         const eosio::chain::account_name& account,
         int64_t shardId);
-    void insertActionTrace(
+    void insertDateActionTrace(
         std::vector<cass_byte_t> globalSeq,
         fc::time_point blockTime,
+        std::vector<cass_byte_t> parent);
+    void insertActionTrace(
+        std::vector<cass_byte_t> globalSeq,
         std::string&& actionTrace);
     void insertActionTraceWithParent(
         std::vector<cass_byte_t> globalSeq,
-        fc::time_point blockTime,
         std::vector<cass_byte_t> parent);
     void insertBlock(
         const std::string& id,
@@ -88,6 +90,7 @@ public:
     static const std::string account_controlling_account_table;
     static const std::string account_action_trace_table;
     static const std::string account_action_trace_shard_table;
+    static const std::string date_action_trace_table;
     static const std::string action_trace_table;
     static const std::string block_table;
     static const std::string lib_table;
@@ -119,6 +122,8 @@ private:
     prepared_guard gPreparedInsertAccountActionTrace_;
     prepared_guard gPreparedInsertAccountActionTraceWithParent_;
     prepared_guard gPreparedInsertAccountActionTraceShard_;
+    prepared_guard gPreparedInsertDateActionTrace_;
+    prepared_guard gPreparedInsertDateActionTraceWithParent_;
     prepared_guard gPreparedInsertActionTrace_;
     prepared_guard gPreparedInsertActionTraceWithParent_;
     prepared_guard gPreparedInsertBlock_;
