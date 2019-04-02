@@ -18,6 +18,7 @@ const std::string CassandraClient::account_public_key_table          = "account_
 const std::string CassandraClient::account_controlling_account_table = "account_controlling_account";
 const std::string CassandraClient::account_action_trace_table        = "account_action_trace";
 const std::string CassandraClient::account_action_trace_shard_table  = "account_action_trace_shard";
+const std::string CassandraClient::date_action_trace_table           = "date_action_trace";
 const std::string CassandraClient::action_trace_table                = "action_trace";
 const std::string CassandraClient::block_table                       = "block";
 const std::string CassandraClient::lib_table                         = "lib";
@@ -25,7 +26,7 @@ const std::string CassandraClient::transaction_table                 = "transact
 const std::string CassandraClient::transaction_trace_table           = "transaction_trace";
 
 
-CassandraClient::CassandraClient(const std::string& hostUrl, const std::string& keyspace, size_t replicationFactor)
+CassandraClient::CassandraClient(const std::string& hostUrl, const std::string& keyspace, size_t replicationFactor, bool dropKeyspace)
     : failed(appbase::app().data_dir() / "cass_failed", eosio::chain::database::read_write, 4096*1024*1024ll),
     keyspace_(keyspace),
     replicationFactor_(replicationFactor),
@@ -40,6 +41,8 @@ CassandraClient::CassandraClient(const std::string& hostUrl, const std::string& 
     gPreparedInsertAccountActionTrace_(nullptr, cass_prepared_free),
     gPreparedInsertAccountActionTraceWithParent_(nullptr, cass_prepared_free),
     gPreparedInsertAccountActionTraceShard_(nullptr, cass_prepared_free),
+    gPreparedInsertDateActionTrace_(nullptr, cass_prepared_free),
+    gPreparedInsertDateActionTraceWithParent_(nullptr, cass_prepared_free),
     gPreparedInsertActionTrace_(nullptr, cass_prepared_free),
     gPreparedInsertActionTraceWithParent_(nullptr, cass_prepared_free),
     gPreparedInsertBlock_(nullptr, cass_prepared_free),
@@ -51,6 +54,7 @@ CassandraClient::CassandraClient(const std::string& hostUrl, const std::string& 
     failed.add_index<eosio::upsert_account_multi_index>();
     failed.add_index<eosio::insert_account_action_trace_multi_index>();
     failed.add_index<eosio::insert_account_action_trace_shard_multi_index>();
+    failed.add_index<eosio::insert_date_action_trace_multi_index>();
     failed.add_index<eosio::insert_action_trace_multi_index>();
     failed.add_index<eosio::insert_block_multi_index>();
     failed.add_index<eosio::insert_transaction_multi_index>();
@@ -74,7 +78,12 @@ CassandraClient::CassandraClient(const std::string& hostUrl, const std::string& 
     if (err == CASS_OK)
     {
         ilog("Connected to Apache Cassandra");
-        init();
+        if (dropKeyspace) {
+            resetKeyspace();
+        }
+        else {
+            init();
+        }
         prepareStatements();
         insertFailed();
     }
@@ -100,9 +109,10 @@ void CassandraClient::init()
         " WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': " + std::to_string(replicationFactor_) + " };");
     execute("USE " + keyspace_ + ";");
     
-    execute("CREATE TABLE IF NOT EXISTS " + action_trace_table + "( global_seq varint, block_date date, block_time timestamp, parent varint, doc text, "
+    execute("CREATE TABLE IF NOT EXISTS " + date_action_trace_table + "( global_seq varint, block_date date, block_time timestamp, parent varint, "
         "PRIMARY KEY(block_date, block_time, global_seq));");
-    execute("CREATE INDEX IF NOT EXISTS ON " + keyspace_ + "." + action_trace_table + " (global_seq);");
+    execute("CREATE TABLE IF NOT EXISTS " + action_trace_table + "( global_seq varint, parent varint, doc text, "
+        "PRIMARY KEY(global_seq));");
     execute("CREATE TABLE IF NOT EXISTS " + account_action_trace_shard_table + " ( account_name text, shard_id timestamp, "
         "PRIMARY KEY(account_name, shard_id));");
     execute("CREATE TABLE IF NOT EXISTS " + account_action_trace_table +
@@ -128,6 +138,7 @@ void CassandraClient::insertFailed()
     const auto& accountUpsertsIdx = failed.get_index<eosio::upsert_account_multi_index, eosio::by_id>();
     const auto& insertAccountActionTraceIdx = failed.get_index<eosio::insert_account_action_trace_multi_index, eosio::by_account_shard_id>();
     const auto& insertAccountActionTraceShardIdx = failed.get_index<eosio::insert_account_action_trace_shard_multi_index, eosio::by_account_shard_id>();
+    const auto& insertDateActionTraceIdx = failed.get_index<eosio::insert_date_action_trace_multi_index, eosio::by_id>();
     const auto& insertActionTraceIdx = failed.get_index<eosio::insert_action_trace_multi_index, eosio::by_id>();
     const auto& insertBlockIdx = failed.get_index<eosio::insert_block_multi_index, eosio::by_id>();
     const auto& insertTransactionIdx = failed.get_index<eosio::insert_transaction_multi_index, eosio::by_id>();
@@ -135,6 +146,7 @@ void CassandraClient::insertFailed()
     std::vector<eosio::upsert_account_object> accUpserts;
     std::vector<eosio::insert_account_action_trace_object> accActionTraces;
     std::vector<eosio::insert_account_action_trace_shard_object> accActionTraceShards;
+    std::vector<eosio::insert_date_action_trace_object> dateActionTraces;
     std::vector<eosio::insert_action_trace_object> actionTraces;
     std::vector<eosio::insert_block_object> blocks;
     std::vector<eosio::insert_transaction_object> transactions;
@@ -153,6 +165,11 @@ void CassandraClient::insertFailed()
     while(!insertAccountActionTraceShardIdx.empty()) {
         auto it = insertAccountActionTraceShardIdx.begin();
         accActionTraceShards.push_back(*it);
+        failed.remove(*it);
+    }
+    while(!insertDateActionTraceIdx.empty()) {
+        auto it = insertDateActionTraceIdx.begin();
+        dateActionTraces.push_back(*it);
         failed.remove(*it);
     }
     while(!insertActionTraceIdx.empty()) {
@@ -235,10 +252,26 @@ void CassandraClient::insertFailed()
     {
         insertAccountActionTraceShard(obj.account, obj.shardId);
     }
-    for (const auto& obj : actionTraces)
+    for (const auto& obj : dateActionTraces)
     {
         std::vector<cass_byte_t> globalSeq;
         fc::time_point blockTime = obj.blockTime;
+        std::vector<cass_byte_t> parent;
+        globalSeq.resize( obj.globalSeq.size() );
+        for (int i = 0; i < obj.globalSeq.size(); i++)
+        {
+            globalSeq[i] = obj.globalSeq[i];
+        }
+        parent.resize( obj.parent.size() );
+        for (int i = 0; i < obj.parent.size(); i++)
+        {
+            parent[i] = obj.parent[i];
+        }
+        insertDateActionTrace(globalSeq, blockTime, parent);
+    }
+    for (const auto& obj : actionTraces)
+    {
+        std::vector<cass_byte_t> globalSeq;
         std::vector<cass_byte_t> parent;
         globalSeq.resize( obj.globalSeq.size() );
         for (int i = 0; i < obj.globalSeq.size(); i++)
@@ -254,11 +287,11 @@ void CassandraClient::insertFailed()
         {
             std::string s;
             s = obj.actionTrace.data();
-            insertActionTrace(globalSeq, blockTime, std::move(s));
+            insertActionTrace(globalSeq, std::move(s));
         }
         else
         {
-            insertActionTraceWithParent(globalSeq, blockTime, parent);
+            insertActionTraceWithParent(globalSeq, parent);
         }
     }
     for (const auto& obj : blocks)
@@ -315,10 +348,14 @@ void CassandraClient::prepareStatements()
         " (account_name, shard_id, global_seq, block_time, parent) VALUES(?, ?, ?, ?, ?)";
     std::string insertAccountActionTraceShardQuery = "INSERT INTO " + account_action_trace_shard_table +
         " (account_name, shard_id) VALUES(?, ?)";
-    std::string insertActionTraceQuery = "INSERT INTO " + action_trace_table +
-        " (global_seq, block_date, block_time, doc) VALUES(?, ?, ?, ?)";
-    std::string insertActionTraceWithParentQuery = "INSERT INTO " + action_trace_table +
+    std::string insertDateActionTraceQuery = "INSERT INTO " + date_action_trace_table +
+        " (global_seq, block_date, block_time) VALUES(?, ?, ?)";
+    std::string insertDateActionTraceWithParentQuery = "INSERT INTO " + date_action_trace_table +
         " (global_seq, block_date, block_time, parent) VALUES(?, ?, ?, ?)";
+    std::string insertActionTraceQuery = "INSERT INTO " + action_trace_table +
+        " (global_seq, doc) VALUES(?, ?)";
+    std::string insertActionTraceWithParentQuery = "INSERT INTO " + action_trace_table +
+        " (global_seq, parent) VALUES(?, ?)";
     std::string insertBlockQuery = "INSERT INTO " + block_table +
         " (id, block_num, doc) VALUES(?, ?, ?)";
     std::string insertIrreversibleBlockQuery = "INSERT INTO " + block_table +
@@ -353,6 +390,8 @@ void CassandraClient::prepareStatements()
     ok &= prepare(insertAccountActionTraceQuery,           &gPreparedInsertAccountActionTrace_);
     ok &= prepare(insertAccountActionTraceWithParentQuery, &gPreparedInsertAccountActionTraceWithParent_);
     ok &= prepare(insertAccountActionTraceShardQuery,      &gPreparedInsertAccountActionTraceShard_);
+    ok &= prepare(insertDateActionTraceQuery,              &gPreparedInsertDateActionTrace_);
+    ok &= prepare(insertDateActionTraceWithParentQuery,    &gPreparedInsertDateActionTraceWithParent_);
     ok &= prepare(insertActionTraceQuery,                  &gPreparedInsertActionTrace_);
     ok &= prepare(insertActionTraceWithParentQuery,        &gPreparedInsertActionTraceWithParent_);
     ok &= prepare(insertBlockQuery,                        &gPreparedInsertBlock_);
@@ -367,7 +406,7 @@ void CassandraClient::prepareStatements()
     }
 }
 
-void CassandraClient::batchInsertActionTraceWithParent(
+void CassandraClient::batchInsertDateActionTrace(
     const std::vector<std::tuple<std::vector<cass_byte_t>, fc::time_point, std::vector<cass_byte_t>>>& data)
 {
     bool errorHandled = false;
@@ -383,7 +422,7 @@ void CassandraClient::batchInsertActionTraceWithParent(
             std::vector<cass_byte_t> parent;
             std::tie(globalSeq, blockTime, parent) = val;
 
-            failed.create<eosio::insert_action_trace_object>([&]( auto& obj ) {
+            failed.create<eosio::insert_date_action_trace_object>([&]( auto& obj ) {
                 obj.setGlobalSeq(globalSeq);
                 obj.blockTime = blockTime;
                 obj.setParent(parent);
@@ -403,14 +442,19 @@ void CassandraClient::batchInsertActionTraceWithParent(
         fc::time_point blockTime;
         std::vector<cass_byte_t> parent;
         std::tie(globalSeq, blockTime, parent) = val;
-        statement = cass_prepared_bind(gPreparedInsertActionTraceWithParent_.get());
+        bool withParent = !parent.empty();
+        statement = withParent ?
+            cass_prepared_bind(gPreparedInsertDateActionTraceWithParent_.get()) :
+            cass_prepared_bind(gPreparedInsertDateActionTrace_.get());
         auto gStatement = statement_guard(statement, cass_statement_free);
         cass_uint32_t blockDate = cass_date_from_epoch(blockTime.sec_since_epoch());
         int64_t msFromEpoch = (int64_t)blockTime.time_since_epoch().count() / 1000;
         cass_statement_bind_bytes_by_name(statement, "global_seq", globalSeq.data(), globalSeq.size());
         cass_statement_bind_uint32_by_name(statement, "block_date", blockDate);
         cass_statement_bind_int64_by_name(statement, "block_time", msFromEpoch);
-        cass_statement_bind_bytes_by_name(statement, "parent", parent.data(), parent.size());
+        if (withParent) {
+            cass_statement_bind_bytes_by_name(statement, "parent", parent.data(), parent.size());
+        }
         cass_batch_add_statement(batch, statement);
     }
     auto future = cass_session_execute_batch(gSession_.get(), batch);
@@ -810,43 +854,7 @@ void CassandraClient::insertAccountActionTraceShard(
     guard.reset();
 }
 
-void CassandraClient::insertActionTrace(
-    std::vector<cass_byte_t> globalSeq,
-    fc::time_point blockTime,
-    std::string&& actionTrace)
-{
-    bool errorHandled = false;
-    auto f = [&, this]()
-    {
-        if (errorHandled) return;
-        std::lock_guard<std::mutex> lock(db_mtx);
-
-        failed.create<eosio::insert_action_trace_object>([&]( auto& obj ) {
-            obj.setGlobalSeq(globalSeq);
-            obj.blockTime = blockTime;
-            obj.actionTrace.resize(actionTrace.size());
-            std::copy(actionTrace.begin(), actionTrace.end(),
-                obj.actionTrace.begin());
-        });
-        errorHandled = true; //needs to be set so only one object will be written to db even if multiple waitFuture fail
-    };
-    exit_scope guard(f);
-
-    auto statement = cass_prepared_bind(gPreparedInsertActionTrace_.get());
-    auto gStatement = statement_guard(statement, cass_statement_free);
-    cass_uint32_t blockDate = cass_date_from_epoch(blockTime.sec_since_epoch());
-    int64_t msFromEpoch = (int64_t)blockTime.time_since_epoch().count() / 1000;
-    cass_statement_bind_bytes_by_name(statement, "global_seq", globalSeq.data(), globalSeq.size());
-    cass_statement_bind_uint32_by_name(statement, "block_date", blockDate);
-    cass_statement_bind_int64_by_name(statement, "block_time", msFromEpoch);
-    cass_statement_bind_string_by_name(statement, "doc", actionTrace.c_str());
-    auto gFuture = executeStatement(std::move(gStatement));
-
-    waitFuture(std::move(gFuture), f);
-    guard.reset();
-}
-
-void CassandraClient::insertActionTraceWithParent(
+void CassandraClient::insertDateActionTrace(
     std::vector<cass_byte_t> globalSeq,
     fc::time_point blockTime,
     std::vector<cass_byte_t> parent)
@@ -857,7 +865,7 @@ void CassandraClient::insertActionTraceWithParent(
         if (errorHandled) return;
         std::lock_guard<std::mutex> lock(db_mtx);
 
-        failed.create<eosio::insert_action_trace_object>([&]( auto& obj ) {
+        failed.create<eosio::insert_date_action_trace_object>([&]( auto& obj ) {
             obj.setGlobalSeq(globalSeq);
             obj.blockTime = blockTime;
             obj.setParent(parent);
@@ -866,13 +874,76 @@ void CassandraClient::insertActionTraceWithParent(
     };
     exit_scope guard(f);
 
-    auto statement = cass_prepared_bind(gPreparedInsertActionTraceWithParent_.get());
+    bool withParent = !parent.empty();
+    auto statement = withParent ?
+        cass_prepared_bind(gPreparedInsertDateActionTraceWithParent_.get()) :
+        cass_prepared_bind(gPreparedInsertDateActionTrace_.get());
     auto gStatement = statement_guard(statement, cass_statement_free);
     cass_uint32_t blockDate = cass_date_from_epoch(blockTime.sec_since_epoch());
     int64_t msFromEpoch = (int64_t)blockTime.time_since_epoch().count() / 1000;
     cass_statement_bind_bytes_by_name(statement, "global_seq", globalSeq.data(), globalSeq.size());
     cass_statement_bind_uint32_by_name(statement, "block_date", blockDate);
     cass_statement_bind_int64_by_name(statement, "block_time", msFromEpoch);
+    if (withParent) {
+        cass_statement_bind_bytes_by_name(statement, "parent", parent.data(), parent.size());
+    }
+    auto gFuture = executeStatement(std::move(gStatement));
+
+    waitFuture(std::move(gFuture), f);
+    guard.reset();
+}
+
+void CassandraClient::insertActionTrace(
+    std::vector<cass_byte_t> globalSeq,
+    std::string&& actionTrace)
+{
+    bool errorHandled = false;
+    auto f = [&, this]()
+    {
+        if (errorHandled) return;
+        std::lock_guard<std::mutex> lock(db_mtx);
+
+        failed.create<eosio::insert_action_trace_object>([&]( auto& obj ) {
+            obj.setGlobalSeq(globalSeq);
+            obj.actionTrace.resize(actionTrace.size());
+            std::copy(actionTrace.begin(), actionTrace.end(),
+                obj.actionTrace.begin());
+        });
+        errorHandled = true; //needs to be set so only one object will be written to db even if multiple waitFuture fail
+    };
+    exit_scope guard(f);
+
+    auto statement = cass_prepared_bind(gPreparedInsertActionTrace_.get());
+    auto gStatement = statement_guard(statement, cass_statement_free);
+    cass_statement_bind_bytes_by_name(statement, "global_seq", globalSeq.data(), globalSeq.size());
+    cass_statement_bind_string_by_name(statement, "doc", actionTrace.c_str());
+    auto gFuture = executeStatement(std::move(gStatement));
+
+    waitFuture(std::move(gFuture), f);
+    guard.reset();
+}
+
+void CassandraClient::insertActionTraceWithParent(
+    std::vector<cass_byte_t> globalSeq,
+    std::vector<cass_byte_t> parent)
+{
+    bool errorHandled = false;
+    auto f = [&, this]()
+    {
+        if (errorHandled) return;
+        std::lock_guard<std::mutex> lock(db_mtx);
+
+        failed.create<eosio::insert_action_trace_object>([&]( auto& obj ) {
+            obj.setGlobalSeq(globalSeq);
+            obj.setParent(parent);
+        });
+        errorHandled = true; //needs to be set so only one object will be written to db even if multiple waitFuture fail
+    };
+    exit_scope guard(f);
+
+    auto statement = cass_prepared_bind(gPreparedInsertActionTraceWithParent_.get());
+    auto gStatement = statement_guard(statement, cass_statement_free);
+    cass_statement_bind_bytes_by_name(statement, "global_seq", globalSeq.data(), globalSeq.size());
     cass_statement_bind_bytes_by_name(statement, "parent", parent.data(), parent.size());
     auto gFuture = executeStatement(std::move(gStatement));
 
