@@ -583,7 +583,7 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
    auto& chain = chain_plug->chain();
    const auto& idx = db->get_index<account_action_trace_shard_multi_index, by_account>();
 
-   std::vector<std::tuple<std::vector<cass_byte_t>, fc::time_point, std::vector<cass_byte_t>>> batchActionTraceWithParent;
+   std::vector<std::tuple<std::vector<cass_byte_t>, fc::time_point, std::vector<cass_byte_t>>> batchDateActionTrace;
    std::map<eosio::chain::account_name,
       std::vector<std::tuple<eosio::chain::account_name, int64_t, std::vector<cass_byte_t>, fc::time_point, std::vector<cass_byte_t>>>> batchAccountTrace;
    std::vector<std::function<void()>> actionTraceShardInserts;
@@ -593,28 +593,30 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
    {
       auto atrace = p.first;
       auto parent_seq = p.second;
+      auto parent_seq_bytes = num_to_bytes(parent_seq);
       chain::action_trace &at = atrace.get();
       auto global_seq_buffer = num_to_bytes(at.receipt.global_sequence);
 
-      if (parent_seq == 0) {
-            fc::variant atrace_doc = chain.to_variant_with_abi(at, abi_serializer_max_time_ms);
-            traceInserts.emplace_back([=, doc{std::move(atrace_doc)}]()
-            {
+      batchDateActionTrace.emplace_back(std::make_tuple(global_seq_buffer, block_time, parent_seq_bytes));
+      traceInserts.emplace_back([=, &chain, &at]()
+      {
+         try {
+            if (parent_seq == 0) {
+               fc::variant doc = chain.to_variant_with_abi(at, abi_serializer_max_time_ms);
                auto json_atrace = fc::prune_invalid_utf8(fc::json::to_string(doc));
-               try {
-                  cas_client->insertActionTrace(global_seq_buffer, block_time, std::move(json_atrace));
-               } catch (const std::exception& e) {
-                  elog("STD Exception from insertActionTrace ${e}", ("e", e.what()));
-                  appbase::app().quit();
-               } catch (...) {
-                  elog("Unknown exception from insertActionTrace");
-                  appbase::app().quit();
-               }
-            });
-      }
-      else {
-         batchActionTraceWithParent.emplace_back(std::make_tuple(global_seq_buffer, block_time, num_to_bytes(parent_seq)));
-      }
+               cas_client->insertActionTrace(global_seq_buffer, std::move(json_atrace));
+            }
+            else {
+               cas_client->insertActionTraceWithParent(global_seq_buffer, parent_seq_bytes);
+            }
+         } catch (const std::exception& e) {
+            elog("STD Exception from insertActionTrace ${e}", ("e", e.what()));
+            appbase::app().quit();
+         } catch (...) {
+            elog("Unknown exception from insertActionTrace");
+            appbase::app().quit();
+         }
+      });
       std::set<account_name> aset = { at.receipt.receiver };
       std::transform(std::begin(at.act.authorization), std::end(at.act.authorization),
          std::inserter(aset, std::begin(aset)), [](auto& auth) { return auth.actor; });
@@ -664,7 +666,7 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
             });
          }
          auto val = std::make_tuple(a, shardId, global_seq_buffer, block_time.to_time_point(),
-            (parent_seq == 0) ? std::vector<cass_byte_t>{} : num_to_bytes(parent_seq));
+            (parent_seq == 0) ? std::vector<cass_byte_t>{} : parent_seq_bytes);
          auto res = batchAccountTrace.insert(std::make_pair(a, std::vector<decltype(val)>{}));
          res.first->second.emplace_back(val);
       }
@@ -672,7 +674,8 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
 
    check_task_queue_size();
    thread_pool->enqueue(
-      [ this, t{std::move(t)}, block_time, batchActionTraceWithParent{std::move(batchActionTraceWithParent)},
+      [ this, t{std::move(t)}, block_time,
+         batchDateActionTrace{std::move(batchDateActionTrace)},
          batchAccountTrace{std::move(batchAccountTrace)},
          traceInserts{std::move(traceInserts)},
          actionTraceShardInserts{std::move(actionTraceShardInserts)} ]()
@@ -692,18 +695,18 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
             appbase::app().quit();
          }
 
+         for (auto& f : traceInserts)
+         {
+            f();
+         }
          try {
-            cas_client->batchInsertActionTraceWithParent(batchActionTraceWithParent);
+            cas_client->batchInsertDateActionTrace(batchDateActionTrace);
          } catch (const std::exception& e) {
             elog("STD Exception while executing batch with action traces ${e}", ("e", e.what()));
             appbase::app().quit();
          } catch (...) {
             elog("Unknown exception while executing batch with action traces");
             appbase::app().quit();
-         }
-         for (auto& f : traceInserts)
-         {
-            f();
          }
          for (const auto& p : batchAccountTrace)
          {
@@ -836,27 +839,21 @@ void cassandra_history_plugin::plugin_initialize(const variables_map& options) {
             }
          }
 
+         bool dropKeyspace = false;
          if(options.at( "replay-blockchain" ).as<bool>() ||
             options.at( "hard-replay-blockchain" ).as<bool>() ||
             options.at( "delete-all-blocks" ).as<bool>())
          {
+            ilog( "Wiping cassandra on startup" );
+            dropKeyspace = true;
+            fc::remove_all( app().data_dir() / "cass_shard" );
             fc::remove_all( app().data_dir() / "cass_failed" );
          }
          
          std::string url_str = options.at( "cassandra-url" ).as<std::string>();
          std::string keyspace_str = options.at( "cassandra-keyspace" ).as<std::string>();
          size_t replication_factor = options.at( "cassandra-replication-factor" ).as<size_t>();
-         my->cas_client.reset( new CassandraClient(url_str, keyspace_str, replication_factor) );
-
-         if(options.at( "replay-blockchain" ).as<bool>() ||
-            options.at( "hard-replay-blockchain" ).as<bool>() ||
-            options.at( "delete-all-blocks" ).as<bool>()) {
-            if( options.at( "cassandra-wipe" ).as<bool>()) {
-               ilog( "Wiping cassandra on startup" );
-               my->cas_client->resetKeyspace();
-               fc::remove_all( app().data_dir() / "cass_shard" );
-            }
-         }
+         my->cas_client.reset( new CassandraClient(url_str, keyspace_str, replication_factor, dropKeyspace) );
 
          auto db_size = options.at("cassandra-shard-db-size-mb").as<size_t>();
          my->db.reset(new chainbase::database(app().data_dir() / "cass_shard", chain::database::read_write, db_size*1024*1024ll));
