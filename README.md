@@ -4,7 +4,7 @@ Nodeos plugin for archiving blockchain data into Apache Cassandra.
 ## Installation
 1. Get `cassandra_history_plugin` source code into nodeos sources directory.  
 ```sh
-$ git clone https://github.com/atticlab/cassandra_history_plugin.git plugins/elasticsearch_plugin  
+$ git clone https://github.com/atticlab/cassandra_history_plugin.git plugins/cassandra_history_plugin  
 $ cd plugins/elasticsearch_plugin  
 $ git checkout dev
 ```  
@@ -78,8 +78,8 @@ cassandra-filter-out = eosblackdrop::
 1. Create file cmd.cqlsh.  
 ```plain
 USE eos_history;
-CREATE TABLE action_trace ( global_seq varint, block_date date, block_time timestamp, parent varint, doc text, PRIMARY KEY(block_date, block_time, global_seq));
-CREATE INDEX ON eos_history.action_trace (global_seq);
+CREATE TABLE action_trace ( global_seq varint, parent varint, doc text, PRIMARY KEY(global_seq));
+CREATE TABLE date_action_trace ( global_seq varint, block_date date, block_time timestamp, parent varint, PRIMARY KEY(block_date, block_time, global_seq));
 
 CREATE TABLE account_action_trace_shard ( account_name text, shard_id timestamp, PRIMARY KEY(account_name, shard_id));
 CREATE TABLE account_action_trace (shard_id timestamp, account_name text, global_seq varint, block_time timestamp, parent varint,
