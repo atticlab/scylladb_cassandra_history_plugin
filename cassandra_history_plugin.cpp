@@ -98,13 +98,9 @@ class cassandra_history_plugin_impl {
    void on_applied_transaction(const chain::transaction_trace_ptr&);
 
    void process_accepted_block( chain::block_state_ptr );
-   //void _process_accepted_block( chain::block_state_ptr );
    void process_irreversible_block( chain::block_state_ptr );
-   //void _process_irreversible_block( chain::block_state_ptr );
    void process_accepted_transaction(chain::transaction_metadata_ptr);
-   //void _process_accepted_transaction(chain::transaction_metadata_ptr);
    void process_applied_transaction(chain::transaction_trace_ptr);
-   //void _process_applied_transaction(chain::transaction_trace_ptr);
 
    void upsertAccount(
       const chain::action& act,
@@ -778,6 +774,10 @@ void cassandra_history_plugin::set_program_options(options_description&, options
           "cassandra keyspace where data is located.")
          ("cassandra-replication-factor", bpo::value<size_t>()->default_value(1),
           "replication factor that will be used to create cassandra keyspace.")
+         ("cassandra-retry-delay-ms", bpo::value<size_t>()->default_value(200),
+          "Time in milliseconds that plugin will wait before retrying request to cassandra.")
+         ("cassandra-max-retries", bpo::value<size_t>()->default_value(2),
+          "Maximum number of retries for timed out requests.")
          ("cassandra-wipe", bpo::bool_switch()->default_value(false),
           "Only used with --replay-blockchain, --hard-replay-blockchain, or --delete-all-blocks to wipe cassandra db.")
          ("cassandra-block-start", bpo::value<uint32_t>()->default_value(0),
@@ -857,7 +857,11 @@ void cassandra_history_plugin::plugin_initialize(const variables_map& options) {
          std::string url_str = options.at( "cassandra-url" ).as<std::string>();
          std::string keyspace_str = options.at( "cassandra-keyspace" ).as<std::string>();
          size_t replication_factor = options.at( "cassandra-replication-factor" ).as<size_t>();
+         size_t retry_delay_ms = options.at( "cassandra-retry-delay-ms" ).as<size_t>();
+         size_t max_retries = options.at( "cassandra-max-retries" ).as<size_t>();
          my->cas_client.reset( new CassandraClient(url_str, keyspace_str, replication_factor, dropKeyspace) );
+         my->cas_client->setRetryDelay(retry_delay_ms);
+         my->cas_client->setMaxRetries(max_retries);
 
          auto db_size = options.at("cassandra-shard-db-size-mb").as<size_t>();
          my->db.reset(new chainbase::database(app().data_dir() / "cass_shard", chain::database::read_write, db_size*1024*1024ll));
