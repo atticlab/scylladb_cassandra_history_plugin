@@ -33,7 +33,7 @@ target_link_libraries( ${NODE_EXECUTABLE_NAME}
 ```sh
 $ wget http://security.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.0g-2ubuntu4.3_amd64.deb
 $ dpkg -i libssl1.1_1.1.0g-2ubuntu4.3_amd64.deb
-$ aptitude install libuv1
+$ aptitude install libuv1 libjemalloc1
 $ wget http://downloads.datastax.com/cpp-driver/ubuntu/18.04/cassandra/v2.11.0/cassandra-cpp-driver_2.11.0-1_amd64.deb
 $ sudo dpkg -i cassandra-cpp-driver_2.11.0-1_amd64.deb
 $ wget http://downloads.datastax.com/cpp-driver/ubuntu/18.04/cassandra/v2.11.0/cassandra-cpp-driver-dev_2.11.0-1_amd64.deb
