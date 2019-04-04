@@ -48,9 +48,15 @@ abi-serializer-max-time-ms = 1000000
 .....
 plugin = eosio::cassandra_history_plugin
 read-mode = read-only
+#cassandra URL connection string
 cassandra-url = 1.1.1.1
+#keyspace name in cassandra 
 cassandra-keyspace = eos_history
 cassandra-queue-size = 2048
+#retry delay to connecrt to cassandra
+cassandra-retry-delay-ms = 200
+#maximum retries connections to cassandra
+cassandra-max-retries = 4
 ......
 # do not store block data
 cassandra-filter-out = eosio:onblock:
