@@ -27,6 +27,9 @@ public:
     void insertFailed();
     void prepareStatements();
 
+    void setRetryDelay(size_t retry_delay_ms) { retry_delay_ms_ = retry_delay_ms; }
+    void setMaxRetries(size_t max_retries) { max_retries_ = max_retries; }
+
     void batchInsertDateActionTrace(
         const std::vector<std::tuple<std::vector<cass_byte_t>, fc::time_point, std::vector<cass_byte_t>>>& data);
     void batchInsertAccountActionTrace(
@@ -82,8 +85,6 @@ public:
 
     void resetKeyspace();
 
-    void execute(const std::string& query);
-
 
     static const std::string account_table;
     static const std::string account_public_key_table;
@@ -101,16 +102,35 @@ private:
     CassandraClient(const CassandraClient& other) = delete;
     CassandraClient& operator=(const CassandraClient& other) = delete;
 
-    future_guard executeStatement(statement_guard&& gStatement);
-    future_guard executeBatch(batch_guard&& b);
+    bool checkTimeout(future_guard& future) const;
+    void execute(const std::string& query);
+    future_guard execute(batch_guard& b);
+    future_guard execute(batch_guard&& b);
+    future_guard execute(statement_guard& gStatement);
+    future_guard execute(statement_guard&& gStatement);
+    //executes batch, if returned error is timeout then sleeps and retries again
+    //if did not succeed -> stop node
+    void executeWait(batch_guard&& b, const std::function<void()>& onError);
+    //executes statement, if returned error is timeout then sleeps and retries again
+    //if did not succeed -> stop node
+    void executeWait(statement_guard&& gStatement, const std::function<void()>& onError);
+    //wait for future to return something
+    //if error returned -> stop node
     void waitFuture(future_guard&& gFuture);
+    //wait for future to return something
+    //if error returned -> execute callback and stop node
     void waitFuture(future_guard&& gFuture, const std::function<void()>& onError);
+
+    
 
     chainbase::database failed;
     std::mutex db_mtx;
 
     std::string keyspace_;
     size_t replicationFactor_;
+    size_t retry_delay_ms_ = 200;
+    size_t max_retries_ = 2;
+
     cluster_guard gCluster_;
     session_guard gSession_;
     prepared_guard gPreparedDeleteAccountPublicKeys_;
