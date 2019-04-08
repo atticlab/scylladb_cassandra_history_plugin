@@ -1,4 +1,4 @@
-# cassandra_history_plugin (alpha)
+# cassandra_history_plugin (beta)
 Nodeos plugin for archiving blockchain data into Apache Cassandra.  
 **Currently the plugin only work with [official eosio repository](https://github.com/EOSIO/eos).**  
 ## Installation
@@ -112,11 +112,14 @@ cqlsh> SOURCE 'cmd.cqlsh'
 
 ## Start nodeos
 
-1. For the first time. 
+1. For the first time. Example: 
 ```sh
-$ /nodeos_bin_dir/nodeos --delete-all-blocks --genesis-json genesis.json
+$ /nodeos_bin_dir/nodeos --data-dir /your_data_dir --config-dir /your_config_dir --delete-all-blocks --genesis-json genesis.json
 ```  
-2. After receiving about 5000 blocks restart nodeos  
+2. After receiving about 5000 blocks restart nodeos. Example:  
+```sh
+$ /nodeos_bin_dir/nodeos --data-dir /your_data_dir --config-dir /your_config_dir
+```
 
 
 
