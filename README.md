@@ -1,4 +1,4 @@
-# cassandra_history_plugin (beta)
+# cassandra_history_plugin (alpha)
 Nodeos plugin for archiving blockchain data into Apache Cassandra.  
 **Currently the plugin only work with [official eosio repository](https://github.com/EOSIO/eos).**  
 ## Installation
