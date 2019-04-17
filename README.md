@@ -123,4 +123,5 @@ $ /nodeos_bin_dir/nodeos --data-dir /your_data_dir --config-dir /your_config_dir
 
 
 
+##P.S: ScyllaDB instructions will be added soon.
 
