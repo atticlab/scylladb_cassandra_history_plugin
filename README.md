@@ -1,4 +1,4 @@
-# Scylladb or Apache Cassandra Eos History Plugin (alpha)
+# Scylladb / Apache Cassandra Eos History Plugin (alpha)
 Nodeos plugin for archiving blockchain data into ScyllaDB or Apache Cassandra.  
 **Currently the plugin only work with [official eosio repository](https://github.com/EOSIO/eos).**  
 ## Installation
