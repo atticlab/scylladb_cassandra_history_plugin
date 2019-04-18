@@ -1062,6 +1062,72 @@ void CassandraClient::insertTransactionTrace(
     guard.reset();
 }
 
+void CassandraClient::clearFollowingShards(
+    const eosio::chain::account_name& account,
+    int64_t prevShardId)
+{
+    std::string selectQuery = "select * from " + account_action_trace_shard_table +
+        " where account_name=? and shard_id>?;";
+    auto selectStatement = cass_statement_new(selectQuery.c_str(), 2);
+    auto gStatement = statement_guard(selectStatement, cass_statement_free);
+    cass_statement_bind_string(selectStatement, 0, std::string(account).c_str());
+    cass_statement_bind_int64(selectStatement, 1, prevShardId);
+    auto gFuture = execute(std::move(gStatement));
+    if (cass_future_error_code(gFuture.get()) != CASS_OK) {
+        elog("Failed to select shards: ${query}", ("query", selectQuery));
+        appbase::app().quit();
+        return;
+    }
+    const CassResult* result = cass_future_get_result(gFuture.get());
+    auto gResult = result_guard(result, cass_result_free);
+    if (result != nullptr) {
+        auto rowCount = cass_result_row_count(result);
+        if (rowCount > 0) {
+            ilog("Deleting ${n} shards for ${acc}", ("n", rowCount)("acc", std::string(account)));
+        }
+        CassIterator* iterator = cass_iterator_from_result(result);
+        auto gIterator = iterator_guard(iterator, cass_iterator_free);
+        while (cass_iterator_next(iterator)) {
+            const CassRow* row = cass_iterator_get_row(iterator);
+            const CassValue* column1 = cass_row_get_column_by_name(row, "account_name");
+            const CassValue* column2 = cass_row_get_column_by_name(row, "shard_id");
+
+            const char* accountName;
+            size_t accountNameLength;
+            cass_value_get_string(column1, &accountName, &accountNameLength);
+
+            cass_int64_t shardId;
+            cass_value_get_int64(column2, &shardId);
+
+            std::string deleteShardQuery = "delete from " + account_action_trace_table +
+                " where account_name=? and shard_id=?;";
+            auto deleteShardStatement = cass_statement_new(deleteShardQuery.c_str(), 2);
+            gStatement = statement_guard(deleteShardStatement, cass_statement_free);
+            cass_statement_bind_string(deleteShardStatement, 0, accountName);
+            cass_statement_bind_int64(deleteShardStatement, 1, shardId);
+            gFuture = execute(std::move(gStatement));
+            if (cass_future_error_code(gFuture.get()) != CASS_OK) {
+                elog("Delete from shard failed: ${query}", ("query", deleteShardQuery));
+                appbase::app().quit();
+                return;
+            }
+        }
+    }
+
+    std::string deleteQuery = "delete from " + account_action_trace_shard_table +
+        " where account_name=? and shard_id>?;";
+    auto deleteStatement = cass_statement_new(deleteQuery.c_str(), 2);
+    gStatement = statement_guard(deleteStatement, cass_statement_free);
+    cass_statement_bind_string(deleteStatement, 0, std::string(account).c_str());
+    cass_statement_bind_int64(deleteStatement, 1, prevShardId);
+    gFuture = execute(std::move(gStatement));
+    if (cass_future_error_code(gFuture.get()) != CASS_OK) {
+        elog("Delete shards failed: ${query}", ("query", deleteQuery));
+        appbase::app().quit();
+        return;
+    }
+}
+
 
 void CassandraClient::resetKeyspace()
 {
@@ -1136,7 +1202,7 @@ void CassandraClient::executeWait(statement_guard&& gStatement, const std::funct
 void CassandraClient::waitFuture(future_guard&& gFuture)
 {
     auto cassFuture = gFuture.get();
-    if(cass_future_error_code(cassFuture) != CASS_OK) {
+    if (cass_future_error_code(cassFuture) != CASS_OK) {
         const char* message;
         size_t message_length;
         cass_future_error_message(cassFuture, &message, &message_length);
@@ -1148,7 +1214,7 @@ void CassandraClient::waitFuture(future_guard&& gFuture)
 void CassandraClient::waitFuture(future_guard&& gFuture, const std::function<void()>& onError)
 {
     auto cassFuture = gFuture.get();
-    if(cass_future_error_code(cassFuture) != CASS_OK) {
+    if (cass_future_error_code(cassFuture) != CASS_OK) {
         onError();
         
         const char* message;
