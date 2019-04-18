@@ -97,4 +97,6 @@ using session_guard   = CassandraPointerGuard<CassSession,         decltype(cass
 using future_guard    = CassandraPointerGuard<CassFuture,          decltype(cass_future_free)>;
 using statement_guard = CassandraPointerGuard<CassStatement,       decltype(cass_statement_free)>;
 using batch_guard     = CassandraPointerGuard<CassBatch,           decltype(cass_batch_free)>;
+using iterator_guard  = CassandraPointerGuard<CassIterator,        decltype(cass_iterator_free)>;
+using result_guard    = CassandraPointerGuard<const CassResult,    decltype(cass_result_free)>;
 using prepared_guard  = CassandraPointerGuard<const CassPrepared,  decltype(cass_prepared_free)>;

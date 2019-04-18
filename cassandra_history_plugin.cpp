@@ -23,6 +23,7 @@
 #include <deque>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <set>
 #include <tuple>
@@ -623,26 +624,29 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
       for (auto a : aset)
       {
          bool need_insert_shard = false;
+         int64_t lastShardId = std::numeric_limits<int64_t>::max(); //needed only to clear shards. Set it only after need_insert_shard is set to true
          int64_t shardId = 0;
          auto itr = idx.find(a);
          if (itr == idx.end())
          {
+            need_insert_shard = true;
+            lastShardId = 0;
             shardId = block_time_ms;
             db->create<account_action_trace_shard_object>([&]( auto& obj ) {
                obj.account = a;
                obj.timestamp = block_time_ms;
                obj.counter = 1;
             });
-            need_insert_shard = true;
          }
          else if (itr->counter == account_actions_per_shard)
          {
+            need_insert_shard = true;
+            lastShardId = itr->timestamp;
             db->modify<account_action_trace_shard_object>(*itr, [&](auto& obj) {
                obj.timestamp = block_time_ms;
                obj.counter = 1;
             });
             shardId = itr->timestamp;
-            need_insert_shard = true;
          }
          else
          {
@@ -652,6 +656,15 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
             shardId = itr->timestamp;
          }
          if (need_insert_shard) {
+            try {
+               cas_client->clearFollowingShards(a, lastShardId);
+            } catch (const std::exception& e) {
+               elog("STD Exception from insertActionTrace ${e}", ("e", e.what()));
+               appbase::app().quit();
+            } catch (...) {
+               elog("Unknown exception from insertActionTrace");
+               appbase::app().quit();
+            }
             actionTraceShardInserts.emplace_back([=]()
             {
                try {

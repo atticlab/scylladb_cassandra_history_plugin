@@ -83,6 +83,10 @@ public:
         fc::time_point blockTime,
         std::string&& transactionTrace);
 
+    void clearFollowingShards(
+        const eosio::chain::account_name& account,
+        int64_t prevShardId);
+
     void resetKeyspace();
 
 
