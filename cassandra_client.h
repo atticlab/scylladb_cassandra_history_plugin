@@ -107,7 +107,7 @@ private:
     CassandraClient& operator=(const CassandraClient& other) = delete;
 
     bool checkTimeout(future_guard& future) const;
-    void execute(const std::string& query);
+    future_guard execute(const std::string& query);
     future_guard execute(batch_guard& b);
     future_guard execute(batch_guard&& b);
     future_guard execute(statement_guard& gStatement);

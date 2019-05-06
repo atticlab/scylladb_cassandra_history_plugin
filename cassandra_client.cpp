@@ -107,32 +107,47 @@ CassandraClient::~CassandraClient()
 
 void CassandraClient::init()
 {
-    execute("CREATE KEYSPACE IF NOT EXISTS " + keyspace_ +
-        " WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': " + std::to_string(replicationFactor_) + " };");
-    execute("USE " + keyspace_ + ";");
-    
-    execute("CREATE TABLE IF NOT EXISTS " + date_action_trace_table + "( global_seq varint, block_date date, block_time timestamp, parent varint, "
-        "PRIMARY KEY(block_date, block_time, global_seq));");
-    execute("CREATE TABLE IF NOT EXISTS " + action_trace_table + "( global_seq varint, parent varint, doc text, "
-        "PRIMARY KEY(global_seq));");
-    execute("CREATE TABLE IF NOT EXISTS " + account_action_trace_shard_table + " ( account_name text, shard_id timestamp, "
-        "PRIMARY KEY(account_name, shard_id));");
-    execute("CREATE TABLE IF NOT EXISTS " + account_action_trace_table +
-        " (shard_id timestamp, account_name text, global_seq varint, block_time timestamp, parent varint, "
-        "PRIMARY KEY((account_name, shard_id), block_time, global_seq));");
-    execute("CREATE TABLE IF NOT EXISTS " + transaction_table + " (id text, doc text, PRIMARY KEY(id));");
-    execute("CREATE TABLE IF NOT EXISTS " + transaction_trace_table + " (id text, block_num varint, block_date date, doc text, PRIMARY KEY(id));");
-    execute("CREATE TABLE IF NOT EXISTS " + block_table + " (id text, block_num varint, irreversible boolean, doc text, PRIMARY KEY(id));");
-    execute("CREATE INDEX IF NOT EXISTS ON " + keyspace_ + "." + block_table + " (block_num);");
-    execute("CREATE TABLE IF NOT EXISTS " + lib_table + " (part_key int, block_num varint, PRIMARY KEY(part_key));");
-    execute("CREATE TABLE IF NOT EXISTS " + account_table + " (name text, creator text, account_create_time timestamp, abi text, PRIMARY KEY(name));");
-    execute("CREATE TABLE IF NOT EXISTS " + account_public_key_table + " (name text, permission text, key text, PRIMARY KEY(name, permission));");
-    execute("CREATE INDEX IF NOT EXISTS ON " + keyspace_ + "." + account_public_key_table + " (key);");
-    execute("CREATE TABLE IF NOT EXISTS " + account_controlling_account_table + " (name text, controlling_name text, permission text, "
-        "PRIMARY KEY(name, permission));");
-    execute("CREATE INDEX IF NOT EXISTS ON " + keyspace_ + "." + account_controlling_account_table + " (controlling_name);");
-
-    execute("INSERT INTO " + lib_table + " (part_key, block_num) VALUES(0, 0) IF NOT EXISTS;");
+    std::vector<std::string> queries = {
+        "CREATE KEYSPACE " + keyspace_ + " WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': "
+            + std::to_string(replicationFactor_) + " };",
+        "USE " + keyspace_ + ";",
+        "CREATE TABLE " + date_action_trace_table + "( global_seq varint, block_date date, block_time timestamp, parent varint, "
+            "PRIMARY KEY(block_date, block_time, global_seq));",
+        "CREATE TABLE " + action_trace_table + "( global_seq varint, parent varint, doc text, PRIMARY KEY(global_seq));",
+        "CREATE TABLE " + account_action_trace_shard_table + " ( account_name text, shard_id timestamp, PRIMARY KEY(account_name, shard_id));",
+        "CREATE TABLE " + account_action_trace_table + " (shard_id timestamp, account_name text, global_seq varint, block_time timestamp, parent varint, "
+            "PRIMARY KEY((account_name, shard_id), block_time, global_seq));",
+        "CREATE TABLE " + transaction_table + " (id text, doc text, PRIMARY KEY(id));",
+        "CREATE TABLE " + transaction_trace_table + " (id text, block_num varint, block_date date, doc text, PRIMARY KEY(id));",
+        "CREATE TABLE " + block_table + " (id text, block_num varint, irreversible boolean, doc text, PRIMARY KEY(id));",
+        "CREATE INDEX ON " + keyspace_ + "." + block_table + " (block_num);",
+        "CREATE TABLE " + lib_table + " (part_key int, block_num varint, PRIMARY KEY(part_key));",
+        "CREATE TABLE " + account_table + " (name text, creator text, account_create_time timestamp, abi text, PRIMARY KEY(name));",
+        "CREATE TABLE " + account_public_key_table + " (name text, permission text, key text, PRIMARY KEY(name, permission));",
+        "CREATE INDEX ON " + keyspace_ + "." + account_public_key_table + " (key);",
+        "CREATE TABLE " + account_controlling_account_table + " (name text, controlling_name text, permission text, PRIMARY KEY(name, permission));",
+        "CREATE INDEX ON " + keyspace_ + "." + account_controlling_account_table + " (controlling_name);",
+        "INSERT INTO " + lib_table + " (part_key, block_num) VALUES(0, 0);" //MAYBE DO IT OTHER WAY
+    };
+    for (const auto& query : queries)
+    {
+        auto gFuture = execute(query);
+        auto cassFuture = gFuture.get();
+        auto ec = cass_future_error_code(cassFuture);
+        if (ec != CASS_OK && ec != CASS_ERROR_SERVER_ALREADY_EXISTS) {
+            const char* message;
+            size_t message_length;
+            cass_future_error_message(cassFuture, &message, &message_length);
+            if (ec == CASS_ERROR_SERVER_INVALID_QUERY) {
+                wlog("Cassandra returned Invalid query error: ${desc}.\nMost likely this happened because cassandra tables was already set up."
+                    " Other way any unsuccessful query will cause nodeos to stop.", ("desc", std::string(message, message_length)));
+            }
+            else {
+                elog("Unable to run query: ${desc}", ("desc", std::string(message, message_length)));
+                appbase::app().quit();
+            }
+        }
+    }
 }
 
 void CassandraClient::insertFailed()
@@ -367,7 +382,7 @@ void CassandraClient::prepareStatements()
     std::string insertTransactionTraceQuery = "INSERT INTO " + transaction_trace_table +
         " (id, block_num, block_date, doc) VALUES(?, ?, ?, ?)";
     std::string updateIrreversibleQuery = "UPDATE " + lib_table +
-        " SET block_num=? where part_key=0 IF block_num<?";
+        " SET block_num=? where part_key=0";
 
     auto prepare = [this](const std::string& query, prepared_guard* prepared) -> bool
     {
@@ -1080,46 +1095,52 @@ void CassandraClient::clearFollowingShards(
     }
     const CassResult* result = cass_future_get_result(gFuture.get());
     auto gResult = result_guard(result, cass_result_free);
-    if (result != nullptr) {
-        auto rowCount = cass_result_row_count(result);
-        if (rowCount > 0) {
-            ilog("Deleting ${n} shards for ${acc}", ("n", rowCount)("acc", std::string(account)));
-        }
-        CassIterator* iterator = cass_iterator_from_result(result);
-        auto gIterator = iterator_guard(iterator, cass_iterator_free);
-        while (cass_iterator_next(iterator)) {
-            const CassRow* row = cass_iterator_get_row(iterator);
-            const CassValue* column1 = cass_row_get_column_by_name(row, "account_name");
-            const CassValue* column2 = cass_row_get_column_by_name(row, "shard_id");
+    if (result == nullptr) {
+        return;
+    }
 
-            const char* accountName;
-            size_t accountNameLength;
-            cass_value_get_string(column1, &accountName, &accountNameLength);
+    auto rowCount = cass_result_row_count(result);
+    if (rowCount > 0) {
+        ilog("Deleting ${n} shards for ${acc}", ("n", rowCount)("acc", std::string(account)));
+        return;
+    }
+    cass_int64_t lastShardId = 0;
+    CassIterator* iterator = cass_iterator_from_result(result);
+    auto gIterator = iterator_guard(iterator, cass_iterator_free);
+    while (cass_iterator_next(iterator)) {
+        const CassRow* row = cass_iterator_get_row(iterator);
+        const CassValue* column1 = cass_row_get_column_by_name(row, "account_name");
+        const CassValue* column2 = cass_row_get_column_by_name(row, "shard_id");
 
-            cass_int64_t shardId;
-            cass_value_get_int64(column2, &shardId);
+        const char* accountName;
+        size_t accountNameLength;
+        cass_value_get_string(column1, &accountName, &accountNameLength);
 
-            std::string deleteShardQuery = "delete from " + account_action_trace_table +
-                " where account_name=? and shard_id=?;";
-            auto deleteShardStatement = cass_statement_new(deleteShardQuery.c_str(), 2);
-            gStatement = statement_guard(deleteShardStatement, cass_statement_free);
-            cass_statement_bind_string(deleteShardStatement, 0, accountName);
-            cass_statement_bind_int64(deleteShardStatement, 1, shardId);
-            gFuture = execute(std::move(gStatement));
-            if (cass_future_error_code(gFuture.get()) != CASS_OK) {
-                elog("Delete from shard failed: ${query}", ("query", deleteShardQuery));
-                appbase::app().quit();
-                return;
-            }
+        cass_int64_t shardId;
+        cass_value_get_int64(column2, &shardId);
+        lastShardId = shardId;
+
+        std::string deleteShardQuery = "delete from " + account_action_trace_table +
+            " where account_name=? and shard_id=?;";
+        auto deleteShardStatement = cass_statement_new(deleteShardQuery.c_str(), 2);
+        gStatement = statement_guard(deleteShardStatement, cass_statement_free);
+        cass_statement_bind_string(deleteShardStatement, 0, accountName);
+        cass_statement_bind_int64(deleteShardStatement, 1, shardId);
+        gFuture = execute(std::move(gStatement));
+        if (cass_future_error_code(gFuture.get()) != CASS_OK) {
+            elog("Delete from shard failed: ${query}", ("query", deleteShardQuery));
+            appbase::app().quit();
+            return;
         }
     }
 
     std::string deleteQuery = "delete from " + account_action_trace_shard_table +
-        " where account_name=? and shard_id>?;";
-    auto deleteStatement = cass_statement_new(deleteQuery.c_str(), 2);
+        " where account_name=? and shard_id>? and shard_id<=?;";
+    auto deleteStatement = cass_statement_new(deleteQuery.c_str(), 3);
     gStatement = statement_guard(deleteStatement, cass_statement_free);
     cass_statement_bind_string(deleteStatement, 0, std::string(account).c_str());
     cass_statement_bind_int64(deleteStatement, 1, prevShardId);
+    cass_statement_bind_int64(deleteStatement, 2, lastShardId);
     gFuture = execute(std::move(gStatement));
     if (cass_future_error_code(gFuture.get()) != CASS_OK) {
         elog("Delete shards failed: ${query}", ("query", deleteQuery));
@@ -1131,7 +1152,22 @@ void CassandraClient::clearFollowingShards(
 
 void CassandraClient::resetKeyspace()
 {
-    execute("DROP KEYSPACE IF EXISTS " + keyspace_ + ";");
+    auto gFuture = execute("DROP KEYSPACE " + keyspace_ + ";");
+    auto cassFuture = gFuture.get();
+    auto ec = cass_future_error_code(cassFuture);
+    if (ec != CASS_OK) {
+        const char* message;
+        size_t message_length;
+        cass_future_error_message(cassFuture, &message, &message_length);
+        if (ec == CASS_ERROR_SERVER_CONFIG_ERROR) {
+            wlog("Cassandra returned Config error: ${desc}.\nMost likely this happened because you run on clean cassandra.",
+                ("desc", std::string(message, message_length)));
+        }
+        else {
+            elog("Unable to run query: ${desc}", ("desc", std::string(message, message_length)));
+            appbase::app().quit();
+        }
+    }
     init();
 }
 
@@ -1143,12 +1179,11 @@ bool CassandraClient::checkTimeout(future_guard& gFuture) const
         ec == CASS_ERROR_SERVER_WRITE_TIMEOUT);
 }
 
-void CassandraClient::execute(const std::string& query)
+future_guard CassandraClient::execute(const std::string& query)
 {
     auto statement = cass_statement_new(query.c_str(), 0);
     auto gStatement = statement_guard(statement, cass_statement_free);
-    auto gFuture = execute(std::move(gStatement));
-    waitFuture(std::move(gFuture));
+    return execute(std::move(gStatement));
 }
 
 future_guard CassandraClient::execute(batch_guard& b)
