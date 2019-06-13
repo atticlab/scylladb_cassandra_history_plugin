@@ -102,7 +102,7 @@ CREATE TABLE lib (part_key int, block_num varint, PRIMARY KEY(part_key));
 CREATE TABLE account (name text, creator text, account_create_time timestamp, abi text, PRIMARY KEY(name));
 CREATE TABLE account_public_key (name text, permission text, key text, PRIMARY KEY(name, permission));
 CREATE INDEX ON eos_history.account_public_key (key);
-CREATE TABLE account_controlling_account (name text, controlling_name text, permission text, PRIMARY KEY(name, permission));
+CREATE TABLE account_controlling_account (name text, controlling_name text, permission text, PRIMARY KEY(name, permission, controlling_name));
 CREATE INDEX ON eos_history.account_controlling_account (controlling_name);
 ```  
 2. Create keyspace and tables from the file in cqlsh.  
