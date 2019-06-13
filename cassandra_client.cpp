@@ -123,11 +123,11 @@ void CassandraClient::init()
         "CREATE INDEX ON " + keyspace_ + "." + block_table + " (block_num);",
         "CREATE TABLE " + lib_table + " (part_key int, block_num varint, PRIMARY KEY(part_key));",
         "CREATE TABLE " + account_table + " (name text, creator text, account_create_time timestamp, abi text, PRIMARY KEY(name));",
-        "CREATE TABLE " + account_public_key_table + " (name text, permission text, key text, PRIMARY KEY(name, permission));",
+        "CREATE TABLE " + account_public_key_table + " (name text, permission text, key text, PRIMARY KEY(name, permission, key));",
         "CREATE INDEX ON " + keyspace_ + "." + account_public_key_table + " (key);",
-        "CREATE TABLE " + account_controlling_account_table + " (name text, controlling_name text, permission text, PRIMARY KEY(name, permission));",
+        "CREATE TABLE " + account_controlling_account_table + " (name text, controlling_name text, permission text, PRIMARY KEY(name, permission, controlling_name));",
         "CREATE INDEX ON " + keyspace_ + "." + account_controlling_account_table + " (controlling_name);",
-        "INSERT INTO " + lib_table + " (part_key, block_num) VALUES(0, 0);" //MAYBE DO IT OTHER WAY
+        "INSERT INTO " + lib_table + " (part_key, block_num) VALUES(0, 0);"
     };
     for (const auto& query : queries)
     {
