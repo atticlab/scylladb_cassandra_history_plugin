@@ -281,7 +281,10 @@ void CassandraClient::insertFailed()
         }
         std::string s;
         s = obj.actionTrace.data();
-        insertActionTrace(globalSeq, std::move(s));
+        std::string actionType = obj.actionType.data();
+        std::string receiver = obj.receiver.data();
+        std::string account = obj.account.data();
+        insertActionTrace(globalSeq, std::move(s), actionType, receiver, account);
     }
     for (const auto& obj : blocks)
     {
@@ -809,7 +812,10 @@ void CassandraClient::insertDateActionTrace(
 
 void CassandraClient::insertActionTrace(
     std::vector<cass_byte_t> globalSeq,
-    std::string&& actionTrace)
+    std::string&& actionTrace,
+    const std::string& actionType,
+    const std::string& receiver,
+    const std::string& account)
 {
     bool errorHandled = false;
     auto f = [&, this]()
@@ -822,6 +828,16 @@ void CassandraClient::insertActionTrace(
             obj.actionTrace.resize(actionTrace.size());
             std::copy(actionTrace.begin(), actionTrace.end(),
                 obj.actionTrace.begin());
+
+            obj.actionType.resize(actionType.size());
+            std::copy(actionType.begin(), actionType.end(),
+                obj.actionType.begin());
+            obj.receiver.resize(receiver.size());
+            std::copy(receiver.begin(), receiver.end(),
+                obj.receiver.begin());
+            obj.account.resize(account.size());
+            std::copy(account.begin(), account.end(),
+                obj.account.begin());
         });
         errorHandled = true; //needs to be set so only one object will be written to db even if multiple waitFuture fail
     };
@@ -831,6 +847,9 @@ void CassandraClient::insertActionTrace(
     auto gStatement = statement_guard(statement, cass_statement_free);
     cass_statement_bind_bytes_by_name(statement, "global_seq", globalSeq.data(), globalSeq.size());
     cass_statement_bind_string_by_name(statement, "doc", actionTrace.c_str());
+    cass_statement_bind_string_by_name(statement, "action_type", actionType.c_str());
+    cass_statement_bind_string_by_name(statement, "receiver", receiver.c_str());
+    cass_statement_bind_string_by_name(statement, "account", account.c_str());
     executeWait(std::move(gStatement), f);
 
     guard.reset();

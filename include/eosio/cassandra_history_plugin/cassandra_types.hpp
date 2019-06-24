@@ -84,6 +84,9 @@ namespace eosio
         id_type id;
         chain::shared_blob globalSeq;
         chain::shared_blob actionTrace;
+        chain::shared_blob actionType;
+        chain::shared_blob receiver;
+        chain::shared_blob account;
 
         void setGlobalSeq(const std::vector<cass_byte_t>& gs)
         {
