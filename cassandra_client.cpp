@@ -113,7 +113,14 @@ void CassandraClient::init()
         "USE " + keyspace_ + ";",
         "CREATE TABLE " + date_action_trace_table + "( global_seq varint, block_date date, block_time timestamp, parent varint, "
             "PRIMARY KEY(block_date, block_time, global_seq));",
-        "CREATE TABLE " + action_trace_table + "( global_seq varint, parent varint, doc text, PRIMARY KEY(global_seq));",
+        "CREATE TABLE " + action_trace_table +
+            "(p_key int, global_seq varint, parent varint, doc text, action_type text, receiver text, account text, PRIMARY KEY (p_key, global_seq));",
+        "CREATE CUSTOM INDEX action_type_prefix ON " + action_trace_table +
+            " (action_type) USING 'org.apache.cassandra.index.sasi.SASIIndex' WITH OPTIONS = { 'mode': 'PREFIX' };",
+        "CREATE CUSTOM INDEX account_prefix ON " + action_trace_table +
+            " (account) USING 'org.apache.cassandra.index.sasi.SASIIndex' WITH OPTIONS = { 'mode': 'PREFIX' };",
+        "CREATE CUSTOM INDEX receiver_prefix ON " + action_trace_table +
+            " (receiver) USING 'org.apache.cassandra.index.sasi.SASIIndex' WITH OPTIONS = { 'mode': 'PREFIX' };",
         "CREATE TABLE " + account_action_trace_shard_table + " ( account_name text, shard_id timestamp, PRIMARY KEY(account_name, shard_id));",
         "CREATE TABLE " + account_action_trace_table + " (shard_id timestamp, account_name text, global_seq varint, block_time timestamp, parent varint, "
             "PRIMARY KEY((account_name, shard_id), block_time, global_seq));",
@@ -370,9 +377,9 @@ void CassandraClient::prepareStatements()
     std::string insertDateActionTraceWithParentQuery = "INSERT INTO " + date_action_trace_table +
         " (global_seq, block_date, block_time, parent) VALUES(?, ?, ?, ?)";
     std::string insertActionTraceQuery = "INSERT INTO " + action_trace_table +
-        " (global_seq, doc) VALUES(?, ?)";
+        " (global_seq, doc, action_type, receiver, account) VALUES(?, ?, ?, ?, ?)";
     std::string insertActionTraceWithParentQuery = "INSERT INTO " + action_trace_table +
-        " (global_seq, parent) VALUES(?, ?)";
+        " (global_seq, parent, action_type, receiver, account) VALUES(?, ?, ?, ?, ?)";
     std::string insertBlockQuery = "INSERT INTO " + block_table +
         " (id, block_num, doc) VALUES(?, ?, ?)";
     std::string insertIrreversibleBlockQuery = "INSERT INTO " + block_table +
