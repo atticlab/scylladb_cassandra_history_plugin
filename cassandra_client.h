@@ -65,10 +65,16 @@ public:
         std::vector<cass_byte_t> parent);
     void insertActionTrace(
         std::vector<cass_byte_t> globalSeq,
-        std::string&& actionTrace);
+        std::string&& actionTrace,
+        const std::string& actionType,
+        const std::string& receiver,
+        const std::string& account);
     void insertActionTraceWithParent(
         std::vector<cass_byte_t> globalSeq,
-        std::vector<cass_byte_t> parent);
+        std::vector<cass_byte_t> parent,
+        const std::string& actionType,
+        const std::string& receiver,
+        const std::string& account);
     void insertBlock(
         const std::string& id,
         std::vector<cass_byte_t> blockNumBuffer,
