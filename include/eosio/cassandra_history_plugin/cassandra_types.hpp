@@ -97,7 +97,7 @@ namespace eosio
         }
     };
     class insert_action_trace_object : public chainbase::object<cass_query_object_type::insert_action_trace, insert_action_trace_object> {
-        OBJECT_CTOR(insert_action_trace_object,(globalSeq)(actionTrace)(parent))
+        OBJECT_CTOR(insert_action_trace_object,(globalSeq)(actionTrace)(parent)(actionType)(receiver)(account))
 
         id_type id;
         chain::shared_blob globalSeq;
