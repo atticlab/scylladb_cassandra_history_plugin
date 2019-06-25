@@ -154,11 +154,12 @@ private:
     prepared_guard gPreparedInsertAccountActionTraceShard_;
     prepared_guard gPreparedInsertDateActionTrace_;
     prepared_guard gPreparedInsertDateActionTraceWithParent_;
-    prepared_guard gPreparedInsertActionTrace_;
-    prepared_guard gPreparedInsertActionTraceWithParent_;
     prepared_guard gPreparedInsertBlock_;
     prepared_guard gPreparedInsertIrreversibleBlock_;
     prepared_guard gPreparedInsertTransaction_;
     prepared_guard gPreparedInsertTransactionTrace_;
     prepared_guard gPreparedUpdateIrreversible_;
+
+    std::string insertActionTraceQuery;
+    std::string insertActionTraceWithParentQuery;
 };

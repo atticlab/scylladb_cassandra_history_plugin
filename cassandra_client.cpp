@@ -45,14 +45,17 @@ CassandraClient::CassandraClient(const std::string& hostUrl, const std::string& 
     gPreparedInsertAccountActionTraceShard_(nullptr, cass_prepared_free),
     gPreparedInsertDateActionTrace_(nullptr, cass_prepared_free),
     gPreparedInsertDateActionTraceWithParent_(nullptr, cass_prepared_free),
-    gPreparedInsertActionTrace_(nullptr, cass_prepared_free),
-    gPreparedInsertActionTraceWithParent_(nullptr, cass_prepared_free),
     gPreparedInsertBlock_(nullptr, cass_prepared_free),
     gPreparedInsertIrreversibleBlock_(nullptr, cass_prepared_free),
     gPreparedInsertTransaction_(nullptr, cass_prepared_free),
     gPreparedInsertTransactionTrace_(nullptr, cass_prepared_free),
     gPreparedUpdateIrreversible_(nullptr, cass_prepared_free)
 {
+    insertActionTraceQuery = "INSERT INTO " + action_trace_table +
+        " (part_key, global_seq, doc, action_type, receiver, account) VALUES(partition_by_sequence(?), ?, ?, ?, ?, ?)";
+    insertActionTraceWithParentQuery = "INSERT INTO " + action_trace_table +
+        " (part_key, global_seq, parent, action_type, receiver, account) VALUES(partition_by_sequence(?), ?, ?, ?, ?, ?)";
+
     failed.add_index<eosio::upsert_account_multi_index>();
     failed.add_index<eosio::insert_account_action_trace_multi_index>();
     failed.add_index<eosio::insert_account_action_trace_shard_multi_index>();
@@ -134,7 +137,8 @@ void CassandraClient::init()
         "CREATE INDEX ON " + keyspace_ + "." + account_public_key_table + " (key);",
         "CREATE TABLE " + account_controlling_account_table + " (name text, controlling_name text, permission text, PRIMARY KEY(name, permission, controlling_name));",
         "CREATE INDEX ON " + keyspace_ + "." + account_controlling_account_table + " (controlling_name);",
-        "INSERT INTO " + lib_table + " (part_key, block_num) VALUES(0, 0);"
+        "INSERT INTO " + lib_table + " (part_key, block_num) VALUES(0, 0);",
+        "CREATE OR REPLACE FUNCTION partition_by_sequence (input varint) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE java AS ' int i = input.divide(java.math.BigInteger.valueOf(100000000)).intValue(); return Integer.valueOf(i); ';"
     };
     for (const auto& query : queries)
     {
@@ -379,10 +383,6 @@ void CassandraClient::prepareStatements()
         " (global_seq, block_date, block_time) VALUES(?, ?, ?)";
     std::string insertDateActionTraceWithParentQuery = "INSERT INTO " + date_action_trace_table +
         " (global_seq, block_date, block_time, parent) VALUES(?, ?, ?, ?)";
-    std::string insertActionTraceQuery = "INSERT INTO " + action_trace_table +
-        " (part_key, global_seq, doc, action_type, receiver, account) VALUES(partition_by_sequence(?), ?, ?, ?, ?, ?)";
-    std::string insertActionTraceWithParentQuery = "INSERT INTO " + action_trace_table +
-        " (part_key, global_seq, parent, action_type, receiver, account) VALUES(partition_by_sequence(?), ?, ?, ?, ?, ?)";
     std::string insertBlockQuery = "INSERT INTO " + block_table +
         " (id, block_num, doc) VALUES(?, ?, ?)";
     std::string insertIrreversibleBlockQuery = "INSERT INTO " + block_table +
@@ -419,8 +419,6 @@ void CassandraClient::prepareStatements()
     ok &= prepare(insertAccountActionTraceShardQuery,      &gPreparedInsertAccountActionTraceShard_);
     ok &= prepare(insertDateActionTraceQuery,              &gPreparedInsertDateActionTrace_);
     ok &= prepare(insertDateActionTraceWithParentQuery,    &gPreparedInsertDateActionTraceWithParent_);
-    ok &= prepare(insertActionTraceQuery,                  &gPreparedInsertActionTrace_);
-    ok &= prepare(insertActionTraceWithParentQuery,        &gPreparedInsertActionTraceWithParent_);
     ok &= prepare(insertBlockQuery,                        &gPreparedInsertBlock_);
     ok &= prepare(insertIrreversibleBlockQuery,            &gPreparedInsertIrreversibleBlock_);
     ok &= prepare(insertTransactionQuery,                  &gPreparedInsertTransaction_);
@@ -953,14 +951,15 @@ void CassandraClient::insertActionTrace(
     };
     exit_scope guard(f);
 
-    auto statement = cass_prepared_bind(gPreparedInsertActionTrace_.get());
+    CassStatement* statement = cass_statement_new(insertActionTraceQuery.c_str(), 6);
     auto gStatement = statement_guard(statement, cass_statement_free);
-    cass_statement_bind_bytes_by_name(statement, "part_key", globalSeq.data(), globalSeq.size());
-    cass_statement_bind_bytes_by_name(statement, "global_seq", globalSeq.data(), globalSeq.size());
-    cass_statement_bind_string_by_name(statement, "doc", actionTrace.c_str());
-    cass_statement_bind_string_by_name(statement, "action_type", actionType.c_str());
-    cass_statement_bind_string_by_name(statement, "receiver", receiver.c_str());
-    cass_statement_bind_string_by_name(statement, "account", account.c_str());
+    cass_statement_bind_bytes(statement, 0, globalSeq.data(), globalSeq.size());
+    cass_statement_bind_bytes(statement, 1, globalSeq.data(), globalSeq.size());
+    cass_statement_bind_string(statement, 2, actionTrace.c_str());
+    cass_statement_bind_string(statement, 3, actionType.c_str());
+    cass_statement_bind_string(statement, 4, receiver.c_str());
+    cass_statement_bind_string(statement, 5, account.c_str());
+
     executeWait(std::move(gStatement), f);
 
     guard.reset();
@@ -997,14 +996,15 @@ void CassandraClient::insertActionTraceWithParent(
     };
     exit_scope guard(f);
 
-    auto statement = cass_prepared_bind(gPreparedInsertActionTraceWithParent_.get());
+    CassStatement* statement = cass_statement_new(insertActionTraceWithParentQuery.c_str(), 6);
     auto gStatement = statement_guard(statement, cass_statement_free);
-    cass_statement_bind_bytes_by_name(statement, "part_key", globalSeq.data(), globalSeq.size());
-    cass_statement_bind_bytes_by_name(statement, "global_seq", globalSeq.data(), globalSeq.size());
-    cass_statement_bind_bytes_by_name(statement, "parent", parent.data(), parent.size());
-    cass_statement_bind_string_by_name(statement, "action_type", actionType.c_str());
-    cass_statement_bind_string_by_name(statement, "receiver", receiver.c_str());
-    cass_statement_bind_string_by_name(statement, "account", account.c_str());
+    cass_statement_bind_bytes(statement, 0, globalSeq.data(), globalSeq.size());
+    cass_statement_bind_bytes(statement, 1, globalSeq.data(), globalSeq.size());
+    cass_statement_bind_bytes(statement, 2, parent.data(), parent.size());
+    cass_statement_bind_string(statement, 3, actionType.c_str());
+    cass_statement_bind_string(statement, 4, receiver.c_str());
+    cass_statement_bind_string(statement, 5, account.c_str());
+    
     executeWait(std::move(gStatement), f);
 
     guard.reset();
