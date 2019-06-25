@@ -345,8 +345,6 @@ void CassandraClient::prepareStatements()
         " (account_name, shard_id) VALUES(?, ?)";
     std::string insertDateActionTraceQuery = "INSERT INTO " + date_action_trace_table +
         " (global_seq, block_date, block_time) VALUES(?, ?, ?)";
-    std::string insertActionTraceQuery = "INSERT INTO " + action_trace_table +
-        " (part_key, global_seq, doc, action_type, receiver, account) VALUES(partition_by_sequence(?), ?, ?, ?, ?, ?)";
     std::string insertBlockQuery = "INSERT INTO " + block_table +
         " (id, block_num, doc) VALUES(?, ?, ?)";
     std::string insertIrreversibleBlockQuery = "INSERT INTO " + block_table +
