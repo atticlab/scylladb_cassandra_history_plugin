@@ -109,7 +109,7 @@ void CassandraClient::init()
             + std::to_string(replicationFactor_) + " };",
         "USE " + keyspace_ + ";",
         "CREATE TABLE " + date_action_trace_table + " ( global_seq varint, block_date date, block_time timestamp, PRIMARY KEY(block_date, block_time, global_seq));",
-        "CREATE TABLE " + action_trace_table + " (p_key int, global_seq varint, doc text, action_type text, receiver text, account text, PRIMARY KEY (p_key, global_seq));",
+        "CREATE TABLE " + action_trace_table + " (part_key int, global_seq varint, doc text, action_type text, receiver text, account text, PRIMARY KEY (part_key, global_seq));",
         "CREATE CUSTOM INDEX action_type_prefix ON " + action_trace_table +
             " (action_type) USING 'org.apache.cassandra.index.sasi.SASIIndex' WITH OPTIONS = { 'mode': 'PREFIX' };",
         "CREATE CUSTOM INDEX account_prefix ON " + action_trace_table +
@@ -341,7 +341,7 @@ void CassandraClient::prepareStatements()
     std::string insertDateActionTraceQuery = "INSERT INTO " + date_action_trace_table +
         " (global_seq, block_date, block_time) VALUES(?, ?, ?)";
     std::string insertActionTraceQuery = "INSERT INTO " + action_trace_table +
-        " (global_seq, doc, action_type, receiver, account) VALUES(?, ?, ?, ?, ?)";
+        " (part_key, global_seq, doc, action_type, receiver, account) VALUES(partition_by_sequence(?), ?, ?, ?, ?, ?)";
     std::string insertBlockQuery = "INSERT INTO " + block_table +
         " (id, block_num, doc) VALUES(?, ?, ?)";
     std::string insertIrreversibleBlockQuery = "INSERT INTO " + block_table +
@@ -845,6 +845,7 @@ void CassandraClient::insertActionTrace(
 
     auto statement = cass_prepared_bind(gPreparedInsertActionTrace_.get());
     auto gStatement = statement_guard(statement, cass_statement_free);
+    cass_statement_bind_bytes_by_name(statement, "part_key", globalSeq.data(), globalSeq.size());
     cass_statement_bind_bytes_by_name(statement, "global_seq", globalSeq.data(), globalSeq.size());
     cass_statement_bind_string_by_name(statement, "doc", actionTrace.c_str());
     cass_statement_bind_string_by_name(statement, "action_type", actionType.c_str());
