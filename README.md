@@ -4,8 +4,8 @@ Nodeos plugin for archiving blockchain data into Apache Cassandra.
 ## Installation
 1. Get `cassandra_history_plugin` source code into nodeos sources directory.  
 ```sh
-$ git clone https://github.com/atticlab/cassandra_history_plugin.git plugins/cassandra_history_plugin  
-$ cd plugins/cassandra_history_plugin  
+$ git clone https://github.com/atticlab/cassandra_history_plugin.git plugins/cassandra_history_plugin
+$ cd plugins/cassandra_history_plugin
 $ git checkout dev
 ```  
 2. Add subdirectory to `plugins/CMakeLists.txt`.
