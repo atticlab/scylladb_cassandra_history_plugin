@@ -135,6 +135,9 @@ private:
     size_t retry_delay_ms_ = 200;
     size_t max_retries_ = 2;
 
+    const size_t maxNumConsecutiveFailedQueries = 10;
+    size_t numConsecutiveFailedQueries = 0;
+
     cluster_guard gCluster_;
     session_guard gSession_;
     prepared_guard gPreparedDeleteAccountPublicKeys_;

@@ -1212,6 +1212,12 @@ future_guard CassandraClient::execute(statement_guard&& gStatement)
 
 void CassandraClient::executeWait(batch_guard&& gBatch, const std::function<void()>& onError)
 {
+    if (numConsecutiveFailedQueries >= maxNumConsecutiveFailedQueries) {
+        ilog("Limit of consecutive failed queries was exceeded. Will consider this query failed.");
+        onError();
+        return;
+    }
+
     auto gFuture = execute(gBatch);
     size_t n = 0;
     while (n++ < max_retries_ && checkTimeout(gFuture)) {
@@ -1224,6 +1230,12 @@ void CassandraClient::executeWait(batch_guard&& gBatch, const std::function<void
 
 void CassandraClient::executeWait(statement_guard&& gStatement, const std::function<void()>& onError)
 {
+    if (numConsecutiveFailedQueries >= maxNumConsecutiveFailedQueries) {
+        ilog("Limit of consecutive failed queries was exceeded. Will consider this query failed.");
+        onError();
+        return;
+    }
+    
     auto gFuture = execute(gStatement);
     size_t n = 0;
     while (n++ < max_retries_ && checkTimeout(gFuture)) {
@@ -1238,11 +1250,16 @@ void CassandraClient::waitFuture(future_guard&& gFuture)
 {
     auto cassFuture = gFuture.get();
     if (cass_future_error_code(cassFuture) != CASS_OK) {
+        numConsecutiveFailedQueries++;
+
         const char* message;
         size_t message_length;
         cass_future_error_message(cassFuture, &message, &message_length);
         elog("Unable to run query: ${desc}", ("desc", std::string(message, message_length)));
         appbase::app().quit();
+    }
+    else {
+        numConsecutiveFailedQueries = 0;
     }
 }
 
@@ -1250,6 +1267,8 @@ void CassandraClient::waitFuture(future_guard&& gFuture, const std::function<voi
 {
     auto cassFuture = gFuture.get();
     if (cass_future_error_code(cassFuture) != CASS_OK) {
+        numConsecutiveFailedQueries++;
+        
         onError();
         
         const char* message;
@@ -1257,5 +1276,8 @@ void CassandraClient::waitFuture(future_guard&& gFuture, const std::function<voi
         cass_future_error_message(cassFuture, &message, &message_length);
         elog("Unable to run query: ${desc}", ("desc", std::string(message, message_length)));
         appbase::app().quit();
+    }
+    else {
+        numConsecutiveFailedQueries = 0;
     }
 }
