@@ -518,37 +518,17 @@ void cassandra_history_plugin_impl::process_accepted_transaction(chain::transact
 
 void cassandra_history_plugin_impl::process_applied_transaction(chain::transaction_trace_ptr t) {
 
-   std::vector<std::pair<std::reference_wrapper<chain::action_trace>, uint64_t>> action_traces;
+   std::vector<eosio::chain::action_trace> action_traces;
    std::vector<std::pair<eosio::chain::action, eosio::chain::block_timestamp_type>> upsertAccountActions;
 
    bool executed = t->receipt->status == chain::transaction_receipt_header::executed;
-
-   std::stack<std::pair<std::reference_wrapper<chain::action_trace>, uint64_t>> stack;
    for( auto& atrace : t->action_traces ) {
-      stack.emplace(atrace, 0);
+      if(executed && atrace.receiver == chain::config::system_account_name) {
+         upsertAccountActions.emplace_back(atrace.act, t->block_time);
+      }
 
-      while ( !stack.empty() )
-      {
-         auto& p = stack.top();
-         auto &atrace = p.first.get();
-         auto parent_seq = p.second;
-         stack.pop();
-
-         if(executed && atrace.receipt.receiver == chain::config::system_account_name) {
-            upsertAccountActions.emplace_back(atrace.act, t->block_time);
-         }
-
-         if (filter_include(atrace.receipt.receiver, atrace.act.name, atrace.act.authorization)) {
-            action_traces.emplace_back( atrace, parent_seq );
-            if (parent_seq == 0) {
-               parent_seq = atrace.receipt.global_sequence;
-            }
-         }
-
-         auto &inline_traces = atrace.inline_traces;
-         for( auto it = inline_traces.rbegin(); it != inline_traces.rend(); ++it ) {
-            stack.emplace(*it, parent_seq);
-         }
+      if (filter_include(atrace.receiver, atrace.act.name, atrace.act.authorization)) {
+         action_traces.emplace_back( atrace );
       }
    }
 
@@ -590,26 +570,22 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
    std::vector<std::function<void()>> actionTraceShardInserts;
    std::vector<std::function<void()>> traceInserts;
 
-   for (auto& p : action_traces)
+   for (auto& atrace : action_traces)
    {
-      auto atrace = p.first;
-      auto parent_seq = p.second;
-      auto parent_seq_bytes = num_to_bytes(parent_seq);
-      chain::action_trace &at = atrace.get();
-      auto global_seq_buffer = num_to_bytes(at.receipt.global_sequence);
+      if (!atrace.receipt.valid()) {
+         continue;
+      }
+
+      auto parent_seq_bytes = num_to_bytes(0); //no need in this since eos 1.8
+      auto global_seq_buffer = num_to_bytes(atrace.receipt->global_sequence);
 
       batchDateActionTrace.emplace_back(std::make_tuple(global_seq_buffer, block_time, parent_seq_bytes));
-      traceInserts.emplace_back([=, &chain, &at]()
+      traceInserts.emplace_back([=, &chain, &atrace]()
       {
          try {
-            if (parent_seq == 0) {
-               fc::variant doc = chain.to_variant_with_abi(at, abi_serializer_max_time_ms);
-               auto json_atrace = fc::prune_invalid_utf8(fc::json::to_string(doc));
-               cas_client->insertActionTrace(global_seq_buffer, std::move(json_atrace));
-            }
-            else {
-               cas_client->insertActionTraceWithParent(global_seq_buffer, parent_seq_bytes);
-            }
+            fc::variant doc = chain.to_variant_with_abi(atrace, abi_serializer_max_time_ms);
+            auto json_atrace = fc::prune_invalid_utf8(fc::json::to_string(doc));
+            cas_client->insertActionTrace(global_seq_buffer, std::move(json_atrace));
          } catch (const std::exception& e) {
             elog("STD Exception from insertActionTrace ${e}", ("e", e.what()));
             appbase::app().quit();
@@ -618,8 +594,8 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
             appbase::app().quit();
          }
       });
-      std::set<account_name> aset = { at.receipt.receiver };
-      std::transform(std::begin(at.act.authorization), std::end(at.act.authorization),
+      std::set<account_name> aset = { atrace.receiver };
+      std::transform(std::begin(atrace.act.authorization), std::end(atrace.act.authorization),
          std::inserter(aset, std::begin(aset)), [](auto& auth) { return auth.actor; });
       for (auto a : aset)
       {
@@ -678,8 +654,7 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
                }
             });
          }
-         auto val = std::make_tuple(a, shardId, global_seq_buffer, block_time.to_time_point(),
-            (parent_seq == 0) ? std::vector<cass_byte_t>{} : parent_seq_bytes);
+         auto val = std::make_tuple(a, shardId, global_seq_buffer, block_time.to_time_point(), std::vector<cass_byte_t>{});
          auto res = batchAccountTrace.insert(std::make_pair(a, std::vector<decltype(val)>{}));
          res.first->second.emplace_back(val);
       }
@@ -907,8 +882,9 @@ void cassandra_history_plugin::plugin_initialize(const variables_map& options) {
                my->on_accepted_transaction( t );
             } ));
          my->applied_transaction_connection.emplace(
-            chain.applied_transaction.connect( [&]( const chain::transaction_trace_ptr& t ) {
-               my->on_applied_transaction( t );
+            chain.applied_transaction.connect( [&]( std::tuple<const chain::transaction_trace_ptr&, const chain::signed_transaction&> t ) {
+               auto [ttrace, strans] = t;
+               my->on_applied_transaction( ttrace );
             } ));
 
          my->init();
