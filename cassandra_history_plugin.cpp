@@ -516,13 +516,24 @@ void cassandra_history_plugin_impl::process_accepted_transaction(chain::transact
       });
 }
 
-struct action_trace_with_inline_traces : public eosio::chain::action_trace {
-   using eosio::chain::action_trace::action_trace;
+struct action_trace_wrapper {
+   const eosio::chain::action_trace& act_trace;
+   std::vector<action_trace_wrapper> inline_traces;
 
-   action_trace_with_inline_traces(const eosio::chain::action_trace& t) : eosio::chain::action_trace(t) {}
-
-   std::vector<action_trace_with_inline_traces> inline_traces;
+   action_trace_wrapper(const eosio::chain::action_trace& at) : act_trace(at) {}
 };
+
+fc::variant to_variant(eosio::chain::controller& chain, fc::microseconds abi_serializer_max_time_ms, const action_trace_wrapper& trace)
+{
+   auto v = chain.to_variant_with_abi(trace.act_trace, abi_serializer_max_time_ms);
+   fc::mutable_variant_object doc = v.get_object();
+   std::vector<fc::variant> inline_traces;
+   for (const auto atw : trace.inline_traces) {
+      inline_traces.emplace_back(to_variant(chain, abi_serializer_max_time_ms, atw));
+   }
+   doc["inline_traces"] = inline_traces;
+   return doc;
+}
 
 void cassandra_history_plugin_impl::process_applied_transaction(chain::transaction_trace_ptr t) {
 
@@ -531,7 +542,7 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
       if (!act_trace.receipt.valid() && !act_trace.except.valid()) continue;
       auto closest_unnotified_ancestor_action_ordinal =
          act_trace.closest_unnotified_ancestor_action_ordinal;
-      auto global_sequence = act_trace.receipt.valid() ?
+      auto global_sequence = !act_trace.receipt.valid() ?
                              std::numeric_limits<uint64_t>::max() :
                              act_trace.receipt->global_sequence;
       act_traces_map.emplace( std::make_pair( closest_unnotified_ancestor_action_ordinal,
@@ -540,12 +551,12 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
    }
 
    bool executed = t->receipt->status == chain::transaction_receipt_header::executed;
-   std::vector<std::pair<action_trace_with_inline_traces, uint64_t>> action_traces;
+   std::vector<std::pair<action_trace_wrapper, uint64_t>> action_traces;
    std::vector<std::pair<eosio::chain::action, eosio::chain::block_timestamp_type>> upsertAccountActions;
 
-   std::function<vector<action_trace_with_inline_traces>(uint32_t, uint64_t)> convert_act_trace_to_tree_struct =
-      [&](uint32_t closest_unnotified_ancestor_action_ordinal, uint64_t parent) {
-         vector<action_trace_with_inline_traces> restructured_act_traces;
+   std::function<vector<action_trace_wrapper>(uint32_t, uint64_t)> convert_act_trace_to_tree_struct =
+      [&](uint32_t closest_unnotified_ancestor_action_ordinal, const uint64_t parent) {
+         vector<action_trace_wrapper> restructured_act_traces;
          auto it = act_traces_map.lower_bound(
             std::make_pair( closest_unnotified_ancestor_action_ordinal, 0)
          );
@@ -558,18 +569,15 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
             }
 
             bool include = filter_include(act_trace.receiver, act_trace.act.name, act_trace.act.authorization);
-            if (include) {
-               action_traces.emplace_back(action_trace_with_inline_traces{}, parent);
-            }
 
-            action_trace_with_inline_traces atrace = act_trace;
-            if (include && parent == 0 && act_trace.receipt.valid()) {
-               parent = act_trace.receipt->global_sequence;
-            }
-            atrace.inline_traces = convert_act_trace_to_tree_struct(act_trace.action_ordinal, parent);
+            action_trace_wrapper atrace(act_trace);
+            atrace.inline_traces = convert_act_trace_to_tree_struct(act_trace.action_ordinal,
+                                                                    (include && parent == 0 && act_trace.receipt.valid()) ?
+                                                                    act_trace.receipt->global_sequence :
+                                                                    parent);
             restructured_act_traces.push_back(atrace);
             if (include) {
-               action_traces.back().first = atrace;
+               action_traces.emplace_back(atrace, parent);
             }
          }
          return restructured_act_traces;
@@ -616,7 +624,7 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
 
    for (auto& p : action_traces)
    {
-      auto atrace = p.first;
+      auto& atrace = p.first.act_trace;
       auto parent_seq = p.second;
       if (!atrace.receipt.valid()) {
          continue;
@@ -626,11 +634,11 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
       auto global_seq_buffer = num_to_bytes(atrace.receipt->global_sequence);
 
       batchDateActionTrace.emplace_back(std::make_tuple(global_seq_buffer, block_time, parent_seq_bytes));
-      traceInserts.emplace_back([=, &chain]()
+      traceInserts.emplace_back([=, &chain, atrace=std::move(p.first)]()
       {
          try {
             if (parent_seq == 0) {
-               fc::variant doc = chain.to_variant_with_abi(atrace, abi_serializer_max_time_ms);
+               fc::variant doc = to_variant(chain, abi_serializer_max_time_ms, atrace);
                auto json_atrace = fc::prune_invalid_utf8(fc::json::to_string(doc));
                cas_client->insertActionTrace(global_seq_buffer, std::move(json_atrace));
             }
@@ -962,6 +970,3 @@ void cassandra_history_plugin::plugin_shutdown() {
 }
 
 }
-
-
-FC_REFLECT_DERIVED(eosio::action_trace_with_inline_traces, (eosio::chain::action_trace), (inline_traces))
