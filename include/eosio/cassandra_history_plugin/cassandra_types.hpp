@@ -38,14 +38,13 @@ namespace eosio
         chain::shared_blob data;
     };
     class insert_account_action_trace_object : public chainbase::object<cass_query_object_type::insert_account_action_trace, insert_account_action_trace_object> {
-        OBJECT_CTOR(insert_account_action_trace_object,(globalSeq)(parent))
+        OBJECT_CTOR(insert_account_action_trace_object,(globalSeq))
 
         id_type id;
         chain::account_name account;
         int64_t shardId;
         chain::shared_blob globalSeq;
         fc::time_point blockTime;
-        chain::shared_blob parent;
 
         void setGlobalSeq(const std::vector<cass_byte_t>& gs)
         {
@@ -53,14 +52,6 @@ namespace eosio
             for (int i = 0; i < gs.size(); i++)
             {
                 globalSeq[i] = gs[i];
-            }
-        }
-        void setParent(const std::vector<cass_byte_t>& p)
-        {
-            parent.resize( p.size() );
-            for (int i = 0; i < p.size(); i++)
-            {
-                parent[i] = p[i];
             }
         }
     };
@@ -72,12 +63,11 @@ namespace eosio
         int64_t shardId;
     };
     class insert_date_action_trace_object : public chainbase::object<cass_query_object_type::insert_date_action_trace, insert_date_action_trace_object> {
-        OBJECT_CTOR(insert_date_action_trace_object,(globalSeq)(parent))
+        OBJECT_CTOR(insert_date_action_trace_object,(globalSeq))
 
         id_type id;
         chain::shared_blob globalSeq;
         fc::time_point blockTime;
-        chain::shared_blob parent;
 
         void setGlobalSeq(const std::vector<cass_byte_t>& gs)
         {
@@ -85,24 +75,15 @@ namespace eosio
             for (int i = 0; i < gs.size(); i++)
             {
                 globalSeq[i] = gs[i];
-            }
-        }
-        void setParent(const std::vector<cass_byte_t>& p)
-        {
-            parent.resize( p.size() );
-            for (int i = 0; i < p.size(); i++)
-            {
-                parent[i] = p[i];
             }
         }
     };
     class insert_action_trace_object : public chainbase::object<cass_query_object_type::insert_action_trace, insert_action_trace_object> {
-        OBJECT_CTOR(insert_action_trace_object,(globalSeq)(actionTrace)(parent))
+        OBJECT_CTOR(insert_action_trace_object,(globalSeq)(actionTrace))
 
         id_type id;
         chain::shared_blob globalSeq;
         chain::shared_blob actionTrace;
-        chain::shared_blob parent;
 
         void setGlobalSeq(const std::vector<cass_byte_t>& gs)
         {
@@ -110,14 +91,6 @@ namespace eosio
             for (int i = 0; i < gs.size(); i++)
             {
                 globalSeq[i] = gs[i];
-            }
-        }
-        void setParent(const std::vector<cass_byte_t>& p)
-        {
-            parent.resize( p.size() );
-            for (int i = 0; i < p.size(); i++)
-            {
-                parent[i] = p[i];
             }
         }
     };
@@ -263,10 +236,10 @@ CHAINBASE_SET_INDEX_TYPE( eosio::insert_transaction_object,                eosio
 CHAINBASE_SET_INDEX_TYPE( eosio::insert_transaction_trace_object,          eosio::insert_transaction_trace_multi_index )
 
 FC_REFLECT( eosio::upsert_account_object, (name)(blockTime)(data) )
-FC_REFLECT( eosio::insert_account_action_trace_object, (account)(shardId)(globalSeq)(blockTime)(parent) )
+FC_REFLECT( eosio::insert_account_action_trace_object, (account)(shardId)(globalSeq)(blockTime) )
 FC_REFLECT( eosio::insert_account_action_trace_shard_object, (account)(shardId) )
-FC_REFLECT( eosio::insert_date_action_trace_object, (globalSeq)(blockTime)(parent) )
-FC_REFLECT( eosio::insert_action_trace_object, (globalSeq)(actionTrace)(parent) )
+FC_REFLECT( eosio::insert_date_action_trace_object, (globalSeq)(blockTime) )
+FC_REFLECT( eosio::insert_action_trace_object, (globalSeq)(actionTrace) )
 FC_REFLECT( eosio::insert_block_object, (blockId)(blockNum)(block)(irreversible) )
 FC_REFLECT( eosio::insert_transaction_object, (transactionId)(transaction) )
 FC_REFLECT( eosio::insert_transaction_trace_object, (transactionId)(blockNum)(blockTime)(transactionTrace) )

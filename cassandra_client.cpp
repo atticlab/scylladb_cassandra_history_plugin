@@ -104,16 +104,14 @@ CassandraClient::~CassandraClient()
 
 void CassandraClient::init()
 {
-    //TODO: rework
     std::vector<std::string> queries = {
         "CREATE KEYSPACE " + keyspace_ + " WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': "
             + std::to_string(replicationFactor_) + " };",
         "USE " + keyspace_ + ";",
-        "CREATE TABLE " + date_action_trace_table + "( global_seq varint, block_date date, block_time timestamp, parent varint, "
-            "PRIMARY KEY(block_date, block_time, global_seq));",
-        "CREATE TABLE " + action_trace_table + "( global_seq varint, parent varint, doc text, PRIMARY KEY(global_seq));",
+        "CREATE TABLE " + date_action_trace_table + " ( global_seq varint, block_date date, block_time timestamp, PRIMARY KEY(block_date, block_time, global_seq));",
+        "CREATE TABLE " + action_trace_table + " ( global_seq varint, doc text, PRIMARY KEY(global_seq));",
         "CREATE TABLE " + account_action_trace_shard_table + " ( account_name text, shard_id timestamp, PRIMARY KEY(account_name, shard_id));",
-        "CREATE TABLE " + account_action_trace_table + " (shard_id timestamp, account_name text, global_seq varint, block_time timestamp, parent varint, "
+        "CREATE TABLE " + account_action_trace_table + " (shard_id timestamp, account_name text, global_seq varint, block_time timestamp, "
             "PRIMARY KEY((account_name, shard_id), block_time, global_seq));",
         "CREATE TABLE " + transaction_table + " (id text, doc text, PRIMARY KEY(id));",
         "CREATE TABLE " + transaction_trace_table + " (id text, block_num varint, block_date date, doc text, PRIMARY KEY(id));",
