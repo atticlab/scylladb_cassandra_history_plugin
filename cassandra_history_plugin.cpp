@@ -541,52 +541,19 @@ void cassandra_history_plugin_impl::process_accepted_transaction(chain::transact
 
 void cassandra_history_plugin_impl::process_applied_transaction(chain::transaction_trace_ptr t) {
 
-   std::map< std::pair<uint32_t, uint64_t>, const eosio::chain::action_trace& > act_traces_map;
-   for( const auto& act_trace : t->action_traces ) {
-      if (!act_trace.receipt.valid() && !act_trace.except.valid()) continue;
-      auto closest_unnotified_ancestor_action_ordinal =
-         act_trace.closest_unnotified_ancestor_action_ordinal;
-      auto global_sequence = !act_trace.receipt.valid() ?
-                             std::numeric_limits<uint64_t>::max() :
-                             act_trace.receipt->global_sequence;
-      act_traces_map.emplace( std::make_pair( closest_unnotified_ancestor_action_ordinal,
-                                              global_sequence ),
-                              act_trace );
-   }
-
    bool executed = t->receipt->status == chain::transaction_receipt_header::executed;
-   std::vector<std::pair<action_trace_wrapper, uint64_t>> action_traces;
+   std::vector<std::reference_wrapper<eosio::chain::action_trace>> action_traces;
    std::vector<std::pair<eosio::chain::action, eosio::chain::block_timestamp_type>> upsertAccountActions;
 
-   std::function<vector<action_trace_wrapper>(uint32_t, uint64_t)> convert_act_trace_to_tree_struct =
-      [&](uint32_t closest_unnotified_ancestor_action_ordinal, const uint64_t parent) {
-         vector<action_trace_wrapper> restructured_act_traces;
-         auto it = act_traces_map.lower_bound(
-            std::make_pair( closest_unnotified_ancestor_action_ordinal, 0)
-         );
-         for( ;
-            it != act_traces_map.end() && it->first.first == closest_unnotified_ancestor_action_ordinal; ++it )
-         {
-            auto& act_trace = it->second;
-            if(executed && act_trace.receiver == chain::config::system_account_name) {
-               upsertAccountActions.emplace_back(act_trace.act, t->block_time);
-            }
+   for( auto& atrace : t->action_traces ) {
+      if(executed && atrace.receiver == chain::config::system_account_name) {
+         upsertAccountActions.emplace_back(atrace.act, t->block_time);
+      }
 
-            bool include = filter_include(act_trace.receiver, act_trace.act.name, act_trace.act.authorization);
-
-            action_trace_wrapper atrace(act_trace);
-            atrace.inline_traces = convert_act_trace_to_tree_struct(act_trace.action_ordinal,
-                                                                    (include && parent == 0 && act_trace.receipt.valid()) ?
-                                                                    act_trace.receipt->global_sequence :
-                                                                    parent);
-            restructured_act_traces.push_back(atrace);
-            if (include) {
-               action_traces.emplace_back(atrace, parent);
-            }
-         }
-         return restructured_act_traces;
-      };
-   convert_act_trace_to_tree_struct(0, 0);
+      if (filter_include(atrace.receiver, atrace.act.name, atrace.act.authorization)) {
+         action_traces.emplace_back( atrace );
+      }
+   }
 
    if (!upsertAccountActions.empty()) {
       auto f = [upsertAccountActions{ std::move(upsertAccountActions) }, this]()
@@ -617,37 +584,30 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
    auto block_time = t->block_time;
    auto block_time_ms = (int64_t)block_time.to_time_point().time_since_epoch().count() / 1000;
 
+   auto& chain = chain_plug->chain();
    const auto& idx = db->get_index<account_action_trace_shard_multi_index, by_account>();
 
-   std::vector<std::tuple<std::vector<cass_byte_t>, fc::time_point, std::vector<cass_byte_t>>> batchDateActionTrace;
+   std::vector<std::tuple<std::vector<cass_byte_t>, fc::time_point>> batchDateActionTrace;
    std::map<eosio::chain::account_name,
-      std::vector<std::tuple<eosio::chain::account_name, int64_t, std::vector<cass_byte_t>, fc::time_point, std::vector<cass_byte_t>>>> batchAccountTrace;
+      std::vector<std::tuple<eosio::chain::account_name, int64_t, std::vector<cass_byte_t>, fc::time_point>>> batchAccountTrace;
    std::vector<std::function<void()>> actionTraceShardInserts;
    std::vector<std::function<void()>> traceInserts;
 
-   for (auto& p : action_traces)
+   for (auto& trace_ref : action_traces)
    {
-      auto& atrace = p.first.act_trace;
-      auto parent_seq = p.second;
+      auto& atrace = trace_ref.get();
       if (!atrace.receipt.valid()) {
          continue;
       }
-
-      auto parent_seq_bytes = num_to_bytes(parent_seq);
       auto global_seq_buffer = num_to_bytes(atrace.receipt->global_sequence);
 
-      batchDateActionTrace.emplace_back(std::make_tuple(global_seq_buffer, block_time, parent_seq_bytes));
-      traceInserts.emplace_back([=, atrace=std::move(p.first)]()
+      batchDateActionTrace.emplace_back(std::make_tuple(global_seq_buffer, block_time));
+      traceInserts.emplace_back([=, &chain, &atrace]()
       {
          try {
-            if (parent_seq == 0) {
-               fc::variant doc = to_variant(atrace);
-               auto json_atrace = fc::prune_invalid_utf8(fc::json::to_string(doc));
-               cas_client->insertActionTrace(global_seq_buffer, std::move(json_atrace));
-            }
-            else {
-               cas_client->insertActionTraceWithParent(global_seq_buffer, parent_seq_bytes);
-            }
+            fc::variant doc = chain.to_variant_with_abi(atrace, abi_serializer_max_time_ms);
+            auto json_atrace = fc::prune_invalid_utf8(fc::json::to_string(doc));
+            cas_client->insertActionTrace(global_seq_buffer, std::move(json_atrace));
          } catch (const std::exception& e) {
             elog("STD Exception from insertActionTrace ${e}", ("e", e.what()));
             appbase::app().quit();
@@ -716,8 +676,7 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
                }
             });
          }
-         auto val = std::make_tuple(a, shardId, global_seq_buffer, block_time.to_time_point(),
-            (parent_seq == 0) ? std::vector<cass_byte_t>{} : parent_seq_bytes);
+         auto val = std::make_tuple(a, shardId, global_seq_buffer, block_time.to_time_point());
          auto res = batchAccountTrace.insert(std::make_pair(a, std::vector<decltype(val)>{}));
          res.first->second.emplace_back(val);
       }
