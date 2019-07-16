@@ -80,14 +80,6 @@ struct filter_entry {
 };
 
 
-struct action_trace_wrapper {
-   const eosio::chain::action_trace& act_trace;
-   std::vector<action_trace_wrapper> inline_traces;
-
-   action_trace_wrapper(const eosio::chain::action_trace& at) : act_trace(at) {}
-};
-
-
 class cassandra_history_plugin_impl {
    public:
    cassandra_history_plugin_impl();
@@ -118,8 +110,6 @@ class cassandra_history_plugin_impl {
    bool filter_include( const account_name& receiver, const action_name& act_name,
                         const vector<chain::permission_level>& authorization ) const;
    bool filter_include( const transaction& trx ) const;
-
-   fc::variant to_variant(const action_trace_wrapper& trace) const;
 
    void init();
 
@@ -229,19 +219,6 @@ bool cassandra_history_plugin_impl::filter_include( const transaction& trx ) con
       return include;
    }
    return true;
-}
-
-fc::variant cassandra_history_plugin_impl::to_variant(const action_trace_wrapper& trace) const
-{
-   auto& chain = chain_plug->chain();
-   auto v = chain.to_variant_with_abi(trace.act_trace, abi_serializer_max_time_ms);
-   fc::mutable_variant_object doc = v.get_object();
-   std::vector<fc::variant> inline_traces;
-   for (const auto atw : trace.inline_traces) {
-      inline_traces.emplace_back(to_variant(atw));
-   }
-   doc["inline_traces"] = inline_traces;
-   return doc;
 }
 
 
