@@ -149,5 +149,4 @@ private:
     prepared_guard gPreparedUpdateIrreversible_;
 
     std::string insertActionTraceQuery;
-    std::string insertActionTraceWithParentQuery;
 };

@@ -51,8 +51,6 @@ CassandraClient::CassandraClient(const std::string& hostUrl, const std::string& 
 {
     insertActionTraceQuery = "INSERT INTO " + action_trace_table +
         " (part_key, global_seq, doc, action_type, receiver, account) VALUES(partition_by_sequence(?), ?, ?, ?, ?, ?)";
-    insertActionTraceWithParentQuery = "INSERT INTO " + action_trace_table +
-        " (part_key, global_seq, parent, action_type, receiver, account) VALUES(partition_by_sequence(?), ?, ?, ?, ?, ?)";
 
     failed.add_index<eosio::upsert_account_multi_index>();
     failed.add_index<eosio::insert_account_action_trace_multi_index>();
