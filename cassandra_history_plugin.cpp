@@ -15,8 +15,6 @@
 
 #include <boost/algorithm/string.hpp>
 #include <boost/signals2/connection.hpp>
-#include <boost/thread/thread.hpp>
-#include <boost/thread/mutex.hpp>
 
 #include <algorithm>
 #include <ctime>
@@ -25,7 +23,9 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <set>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <vector>
@@ -121,9 +121,9 @@ class cassandra_history_plugin_impl {
    std::set<filter_entry> filter_out;
 
    template<typename Queue, typename Entry> void queue(Queue& queue, const Entry& e);
-   boost::mutex queue_mtx;
-   boost::condition_variable condition;
-   boost::thread consume_thread;
+   std::mutex queue_mtx;
+   std::condition_variable condition;
+   std::thread consume_thread;
 
    size_t max_queue_size = 0;
    int queue_sleep_time = 0;
@@ -133,11 +133,11 @@ class cassandra_history_plugin_impl {
    std::deque<chain::block_state_ptr> irreversible_block_state_queue;
 
    std::queue<std::function<void()>> upsert_account_task_queue;
-   boost::mutex upsert_account_task_mtx;
+   std::mutex upsert_account_task_mtx;
 
    chain_plugin* chain_plug = nullptr;
-   boost::atomic<bool> done{false};
-   boost::atomic<bool> startup{true};
+   std::atomic_bool done{false};
+   std::atomic_bool startup{true};
    fc::optional<chain::chain_id_type> chain_id;
    fc::microseconds abi_serializer_max_time_ms;
 
@@ -243,7 +243,7 @@ cassandra_history_plugin_impl::~cassandra_history_plugin_impl()
 
 void cassandra_history_plugin_impl::init() {
    ilog("starting consume thread");
-   consume_thread = boost::thread([this] { consume_blocks(); });
+   consume_thread = std::thread([this] { consume_blocks(); });
 
    startup = false;
 }
@@ -255,7 +255,7 @@ void cassandra_history_plugin_impl::check_task_queue_size() {
       task_queue_sleep_time += 10;
       if( task_queue_sleep_time > 1000 )
          wlog("thread pool task queue size: ${q}", ("q", task_queue_size));
-      boost::this_thread::sleep_for( boost::chrono::milliseconds( task_queue_sleep_time ));
+      std::this_thread::sleep_for( std::chrono::milliseconds( task_queue_sleep_time ));
    } else {
       task_queue_sleep_time -= 10;
       if( task_queue_sleep_time < 0 ) task_queue_sleep_time = 0;
@@ -270,7 +270,7 @@ void cassandra_history_plugin_impl::consume_blocks() {
 
    try {
       while (true) {
-         boost::mutex::scoped_lock lock(queue_mtx);
+         std::unique_lock<std::mutex> lock(queue_mtx);
          while ( transaction_metadata_queue.empty() &&
                  transaction_trace_queue.empty() &&
                  block_state_queue.empty() &&
@@ -355,7 +355,7 @@ void cassandra_history_plugin_impl::consume_blocks() {
 
 template<typename Queue, typename Entry>
 void cassandra_history_plugin_impl::queue( Queue& queue, const Entry& e ) {
-   boost::mutex::scoped_lock lock( queue_mtx );
+   std::unique_lock<std::mutex> lock( queue_mtx );
    auto queue_size = queue.size();
    if( queue_size > max_queue_size ) {
       lock.unlock();
@@ -363,7 +363,7 @@ void cassandra_history_plugin_impl::queue( Queue& queue, const Entry& e ) {
       queue_sleep_time += 10;
       if( queue_sleep_time > 1000 )
          wlog("queue size: ${q}", ("q", queue_size));
-      boost::this_thread::sleep_for( boost::chrono::milliseconds( queue_sleep_time ));
+      std::this_thread::sleep_for( std::chrono::milliseconds( queue_sleep_time ));
       lock.lock();
    } else {
       queue_sleep_time -= 10;
@@ -518,37 +518,17 @@ void cassandra_history_plugin_impl::process_accepted_transaction(chain::transact
 
 void cassandra_history_plugin_impl::process_applied_transaction(chain::transaction_trace_ptr t) {
 
-   std::vector<std::pair<std::reference_wrapper<chain::action_trace>, uint64_t>> action_traces;
+   bool executed = t->receipt->status == chain::transaction_receipt_header::executed;
+   std::vector<std::reference_wrapper<eosio::chain::action_trace>> action_traces;
    std::vector<std::pair<eosio::chain::action, eosio::chain::block_timestamp_type>> upsertAccountActions;
 
-   bool executed = t->receipt->status == chain::transaction_receipt_header::executed;
-
-   std::stack<std::pair<std::reference_wrapper<chain::action_trace>, uint64_t>> stack;
    for( auto& atrace : t->action_traces ) {
-      stack.emplace(atrace, 0);
+      if(executed && atrace.receiver == chain::config::system_account_name) {
+         upsertAccountActions.emplace_back(atrace.act, t->block_time);
+      }
 
-      while ( !stack.empty() )
-      {
-         auto& p = stack.top();
-         auto &atrace = p.first.get();
-         auto parent_seq = p.second;
-         stack.pop();
-
-         if(executed && atrace.receipt.receiver == chain::config::system_account_name) {
-            upsertAccountActions.emplace_back(atrace.act, t->block_time);
-         }
-
-         if (filter_include(atrace.receipt.receiver, atrace.act.name, atrace.act.authorization)) {
-            action_traces.emplace_back( atrace, parent_seq );
-            if (parent_seq == 0) {
-               parent_seq = atrace.receipt.global_sequence;
-            }
-         }
-
-         auto &inline_traces = atrace.inline_traces;
-         for( auto it = inline_traces.rbegin(); it != inline_traces.rend(); ++it ) {
-            stack.emplace(*it, parent_seq);
-         }
+      if (filter_include(atrace.receiver, atrace.act.name, atrace.act.authorization)) {
+         action_traces.emplace_back( atrace );
       }
    }
 
@@ -561,14 +541,14 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
          }
       };
       {
-         boost::mutex::scoped_lock guard(upsert_account_task_mtx);
+         std::unique_lock<std::mutex> guard(upsert_account_task_mtx);
          upsert_account_task_queue.emplace( std::move(f) );
       }
       check_task_queue_size();
       thread_pool->enqueue(
          [ this ]()
          {
-            boost::mutex::scoped_lock guard(upsert_account_task_mtx);
+            std::unique_lock<std::mutex> guard(upsert_account_task_mtx);
             std::function<void()> task = std::move( upsert_account_task_queue.front() );
             task();
             upsert_account_task_queue.pop();
@@ -584,32 +564,27 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
    auto& chain = chain_plug->chain();
    const auto& idx = db->get_index<account_action_trace_shard_multi_index, by_account>();
 
-   std::vector<std::tuple<std::vector<cass_byte_t>, fc::time_point, std::vector<cass_byte_t>>> batchDateActionTrace;
+   std::vector<std::tuple<std::vector<cass_byte_t>, fc::time_point>> batchDateActionTrace;
    std::map<eosio::chain::account_name,
-      std::vector<std::tuple<eosio::chain::account_name, int64_t, std::vector<cass_byte_t>, fc::time_point, std::vector<cass_byte_t>>>> batchAccountTrace;
+      std::vector<std::tuple<eosio::chain::account_name, int64_t, std::vector<cass_byte_t>, fc::time_point>>> batchAccountTrace;
    std::vector<std::function<void()>> actionTraceShardInserts;
    std::vector<std::function<void()>> traceInserts;
 
-   for (auto& p : action_traces)
+   for (auto& trace_ref : action_traces)
    {
-      auto atrace = p.first;
-      auto parent_seq = p.second;
-      auto parent_seq_bytes = num_to_bytes(parent_seq);
-      chain::action_trace &at = atrace.get();
-      auto global_seq_buffer = num_to_bytes(at.receipt.global_sequence);
+      auto& atrace = trace_ref.get();
+      if (!atrace.receipt.valid()) {
+         continue;
+      }
+      auto global_seq_buffer = num_to_bytes(atrace.receipt->global_sequence);
 
-      batchDateActionTrace.emplace_back(std::make_tuple(global_seq_buffer, block_time, parent_seq_bytes));
-      traceInserts.emplace_back([=, &chain, &at]()
+      batchDateActionTrace.emplace_back(std::make_tuple(global_seq_buffer, block_time));
+      traceInserts.emplace_back([=, &chain, &atrace]()
       {
          try {
-            if (parent_seq == 0) {
-               fc::variant doc = chain.to_variant_with_abi(at, abi_serializer_max_time_ms);
-               auto json_atrace = fc::prune_invalid_utf8(fc::json::to_string(doc));
-               cas_client->insertActionTrace(global_seq_buffer, std::move(json_atrace));
-            }
-            else {
-               cas_client->insertActionTraceWithParent(global_seq_buffer, parent_seq_bytes);
-            }
+            fc::variant doc = chain.to_variant_with_abi(atrace, abi_serializer_max_time_ms);
+            auto json_atrace = fc::prune_invalid_utf8(fc::json::to_string(doc));
+            cas_client->insertActionTrace(global_seq_buffer, std::move(json_atrace));
          } catch (const std::exception& e) {
             elog("STD Exception from insertActionTrace ${e}", ("e", e.what()));
             appbase::app().quit();
@@ -618,8 +593,8 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
             appbase::app().quit();
          }
       });
-      std::set<account_name> aset = { at.receipt.receiver };
-      std::transform(std::begin(at.act.authorization), std::end(at.act.authorization),
+      std::set<account_name> aset = { atrace.receiver };
+      std::transform(std::begin(atrace.act.authorization), std::end(atrace.act.authorization),
          std::inserter(aset, std::begin(aset)), [](auto& auth) { return auth.actor; });
       for (auto a : aset)
       {
@@ -659,10 +634,10 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
             try {
                cas_client->clearFollowingShards(a, lastShardId);
             } catch (const std::exception& e) {
-               elog("STD Exception from insertActionTrace ${e}", ("e", e.what()));
+               elog("STD Exception from clearFollowingShards ${e}", ("e", e.what()));
                appbase::app().quit();
             } catch (...) {
-               elog("Unknown exception from insertActionTrace");
+               elog("Unknown exception from clearFollowingShards");
                appbase::app().quit();
             }
             actionTraceShardInserts.emplace_back([=]()
@@ -670,16 +645,15 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
                try {
                   cas_client->insertAccountActionTraceShard(a, shardId);
                } catch (const std::exception& e) {
-                  elog("STD Exception from insertActionTrace ${e}", ("e", e.what()));
+                  elog("STD Exception from insertAccountActionTraceShard ${e}", ("e", e.what()));
                   appbase::app().quit();
                } catch (...) {
-                  elog("Unknown exception from insertActionTrace");
+                  elog("Unknown exception from insertAccountActionTraceShard");
                   appbase::app().quit();
                }
             });
          }
-         auto val = std::make_tuple(a, shardId, global_seq_buffer, block_time.to_time_point(),
-            (parent_seq == 0) ? std::vector<cass_byte_t>{} : parent_seq_bytes);
+         auto val = std::make_tuple(a, shardId, global_seq_buffer, block_time.to_time_point());
          auto res = batchAccountTrace.insert(std::make_pair(a, std::vector<decltype(val)>{}));
          res.first->second.emplace_back(val);
       }
@@ -907,8 +881,9 @@ void cassandra_history_plugin::plugin_initialize(const variables_map& options) {
                my->on_accepted_transaction( t );
             } ));
          my->applied_transaction_connection.emplace(
-            chain.applied_transaction.connect( [&]( const chain::transaction_trace_ptr& t ) {
-               my->on_applied_transaction( t );
+            chain.applied_transaction.connect( [&]( std::tuple<const chain::transaction_trace_ptr&, const chain::signed_transaction&> t ) {
+               auto [ttrace, strans] = t;
+               my->on_applied_transaction( ttrace );
             } ));
 
          my->init();

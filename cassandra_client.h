@@ -31,9 +31,9 @@ public:
     void setMaxRetries(size_t max_retries) { max_retries_ = max_retries; }
 
     void batchInsertDateActionTrace(
-        const std::vector<std::tuple<std::vector<cass_byte_t>, fc::time_point, std::vector<cass_byte_t>>>& data);
+        const std::vector<std::tuple<std::vector<cass_byte_t>, fc::time_point>>& data);
     void batchInsertAccountActionTrace(
-        const std::vector<std::tuple<eosio::chain::account_name, int64_t, std::vector<cass_byte_t>, fc::time_point, std::vector<cass_byte_t>>>& data);
+        const std::vector<std::tuple<eosio::chain::account_name, int64_t, std::vector<cass_byte_t>, fc::time_point>>& data);
 
     void insertAccount(
         const eosio::chain::newaccount& newacc,
@@ -50,25 +50,15 @@ public:
         int64_t shardId,
         std::vector<cass_byte_t> globalSeq,
         fc::time_point blockTime);
-    void insertAccountActionTraceWithParent(
-        const eosio::chain::account_name& account,
-        int64_t shardId,
-        std::vector<cass_byte_t> globalSeq,
-        fc::time_point blockTime,
-        std::vector<cass_byte_t> parent);
     void insertAccountActionTraceShard(
         const eosio::chain::account_name& account,
         int64_t shardId);
     void insertDateActionTrace(
         std::vector<cass_byte_t> globalSeq,
-        fc::time_point blockTime,
-        std::vector<cass_byte_t> parent);
+        fc::time_point blockTime);
     void insertActionTrace(
         std::vector<cass_byte_t> globalSeq,
         std::string&& actionTrace);
-    void insertActionTraceWithParent(
-        std::vector<cass_byte_t> globalSeq,
-        std::vector<cass_byte_t> parent);
     void insertBlock(
         const std::string& id,
         std::vector<cass_byte_t> blockNumBuffer,
@@ -147,12 +137,9 @@ private:
     prepared_guard gPreparedInsertAccountPublicKeys_;
     prepared_guard gPreparedInsertAccountControls_;
     prepared_guard gPreparedInsertAccountActionTrace_;
-    prepared_guard gPreparedInsertAccountActionTraceWithParent_;
     prepared_guard gPreparedInsertAccountActionTraceShard_;
     prepared_guard gPreparedInsertDateActionTrace_;
-    prepared_guard gPreparedInsertDateActionTraceWithParent_;
     prepared_guard gPreparedInsertActionTrace_;
-    prepared_guard gPreparedInsertActionTraceWithParent_;
     prepared_guard gPreparedInsertBlock_;
     prepared_guard gPreparedInsertIrreversibleBlock_;
     prepared_guard gPreparedInsertTransaction_;
