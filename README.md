@@ -85,9 +85,8 @@ cassandra-filter-out = eosblackdrop::
 ```plain
 USE eos_history;
 CREATE TABLE action_trace (part_key int, global_seq varint, parent varint, doc text, action_type text, receiver text, account text, PRIMARY KEY (part_key, global_seq));
-CREATE CUSTOM INDEX action_type_prefix ON action_trace (action_type) USING 'org.apache.cassandra.index.sasi.SASIIndex' WITH OPTIONS = { 'mode': 'PREFIX' };
-CREATE CUSTOM INDEX account_prefix ON action_trace (account) USING 'org.apache.cassandra.index.sasi.SASIIndex' WITH OPTIONS = { 'mode': 'PREFIX' };
-CREATE CUSTOM INDEX receiver_prefix ON action_trace (receiver) USING 'org.apache.cassandra.index.sasi.SASIIndex' WITH OPTIONS = { 'mode': 'PREFIX' };
+CREATE MATERIALIZED VIEW action_trace_by_action_type AS SELECT * FROM action_trace
+    WHERE part_key IS NOT NULL AND global_seq IS NOT NULL AND action_type IS NOT NULL PRIMARY KEY ((part_key, action_type), global_seq);
 
 CREATE TABLE date_action_trace ( global_seq varint, block_date date, block_time timestamp, parent varint, PRIMARY KEY(block_date, block_time, global_seq));
 
