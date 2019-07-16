@@ -79,11 +79,14 @@ namespace eosio
         }
     };
     class insert_action_trace_object : public chainbase::object<cass_query_object_type::insert_action_trace, insert_action_trace_object> {
-        OBJECT_CTOR(insert_action_trace_object,(globalSeq)(actionTrace))
+        OBJECT_CTOR(insert_action_trace_object,(globalSeq)(actionTrace)(actionType)(receiver)(account))
 
         id_type id;
         chain::shared_blob globalSeq;
         chain::shared_blob actionTrace;
+        chain::shared_blob actionType;
+        chain::shared_blob receiver;
+        chain::shared_blob account;
 
         void setGlobalSeq(const std::vector<cass_byte_t>& gs)
         {
@@ -239,7 +242,7 @@ FC_REFLECT( eosio::upsert_account_object, (name)(blockTime)(data) )
 FC_REFLECT( eosio::insert_account_action_trace_object, (account)(shardId)(globalSeq)(blockTime) )
 FC_REFLECT( eosio::insert_account_action_trace_shard_object, (account)(shardId) )
 FC_REFLECT( eosio::insert_date_action_trace_object, (globalSeq)(blockTime) )
-FC_REFLECT( eosio::insert_action_trace_object, (globalSeq)(actionTrace) )
+FC_REFLECT( eosio::insert_action_trace_object, (globalSeq)(actionTrace)(actionType)(receiver)(account) )
 FC_REFLECT( eosio::insert_block_object, (blockId)(blockNum)(block)(irreversible) )
 FC_REFLECT( eosio::insert_transaction_object, (transactionId)(transaction) )
 FC_REFLECT( eosio::insert_transaction_trace_object, (transactionId)(blockNum)(blockTime)(transactionTrace) )
