@@ -17,6 +17,35 @@
 #include "cassandra_guard.h"
 
 
+template <typename T>
+std::vector<cass_byte_t> num_to_bytes(T num)
+{
+   static_assert(std::is_integral<T>::value, "num_to_bytes is only for integral types.");
+
+   std::vector<cass_byte_t> bytes;
+   bytes.reserve(sizeof(num));
+   for (int i = sizeof(num) - 1; i >= 0; --i)
+   {
+      cass_byte_t byte = (num >> 8 * i);
+      if (bytes.empty() && !byte)
+      {
+         continue;
+      }
+      if (std::is_unsigned<T>::value &&
+          bytes.empty() && byte & 0x80)
+      {
+         bytes.push_back(0x0);
+      }
+      bytes.push_back(byte & 0xFF);
+   }
+   if (bytes.empty())
+   {
+      bytes.push_back(0x0);
+   }
+   return bytes;
+}
+
+
 class CassandraClient
 {
 public:
@@ -57,7 +86,7 @@ public:
         std::vector<cass_byte_t> globalSeq,
         fc::time_point blockTime);
     void insertActionTrace(
-        std::vector<cass_byte_t> globalSeq,
+        uint64_t globalSeq,
         std::string&& actionTrace,
         const std::string& actionType,
         const std::string& receiver,
@@ -142,11 +171,10 @@ private:
     prepared_guard gPreparedInsertAccountActionTrace_;
     prepared_guard gPreparedInsertAccountActionTraceShard_;
     prepared_guard gPreparedInsertDateActionTrace_;
+    prepared_guard gPreparedInsertActionTrace_;
     prepared_guard gPreparedInsertBlock_;
     prepared_guard gPreparedInsertIrreversibleBlock_;
     prepared_guard gPreparedInsertTransaction_;
     prepared_guard gPreparedInsertTransactionTrace_;
     prepared_guard gPreparedUpdateIrreversible_;
-
-    std::string insertActionTraceQuery;
 };

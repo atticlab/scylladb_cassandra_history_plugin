@@ -43,15 +43,13 @@ CassandraClient::CassandraClient(const std::string& hostUrl, const std::string& 
     gPreparedInsertAccountActionTrace_(nullptr, cass_prepared_free),
     gPreparedInsertAccountActionTraceShard_(nullptr, cass_prepared_free),
     gPreparedInsertDateActionTrace_(nullptr, cass_prepared_free),
+    gPreparedInsertActionTrace_(nullptr, cass_prepared_free),
     gPreparedInsertBlock_(nullptr, cass_prepared_free),
     gPreparedInsertIrreversibleBlock_(nullptr, cass_prepared_free),
     gPreparedInsertTransaction_(nullptr, cass_prepared_free),
     gPreparedInsertTransactionTrace_(nullptr, cass_prepared_free),
     gPreparedUpdateIrreversible_(nullptr, cass_prepared_free)
 {
-    insertActionTraceQuery = "INSERT INTO " + action_trace_table +
-        " (part_key, global_seq, doc, action_type, receiver, account) VALUES(partition_by_sequence(?), ?, ?, ?, ?, ?)";
-
     failed.add_index<eosio::upsert_account_multi_index>();
     failed.add_index<eosio::insert_account_action_trace_multi_index>();
     failed.add_index<eosio::insert_account_action_trace_shard_multi_index>();
@@ -127,8 +125,7 @@ void CassandraClient::init()
         "CREATE INDEX ON " + keyspace_ + "." + account_public_key_table + " (key);",
         "CREATE TABLE " + account_controlling_account_table + " (name text, controlling_name text, permission text, PRIMARY KEY(name, permission, controlling_name));",
         "CREATE INDEX ON " + keyspace_ + "." + account_controlling_account_table + " (controlling_name);",
-        "INSERT INTO " + lib_table + " (part_key, block_num) VALUES(0, 0);",
-        "CREATE OR REPLACE FUNCTION partition_by_sequence (input varint) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE java AS ' int i = input.divide(java.math.BigInteger.valueOf(100000000)).intValue(); return Integer.valueOf(i); ';"
+        "INSERT INTO " + lib_table + " (part_key, block_num) VALUES(0, 0);"
     };
     for (const auto& query : queries)
     {
@@ -272,18 +269,12 @@ void CassandraClient::insertFailed()
     }
     for (const auto& obj : actionTraces)
     {
-        std::vector<cass_byte_t> globalSeq;
-        globalSeq.resize( obj.globalSeq.size() );
-        for (int i = 0; i < obj.globalSeq.size(); i++)
-        {
-            globalSeq[i] = obj.globalSeq[i];
-        }
         std::string s;
         s = obj.actionTrace.data();
         std::string actionType = obj.actionType.data();
         std::string receiver = obj.receiver.data();
         std::string account = obj.account.data();
-        insertActionTrace(globalSeq, std::move(s), actionType, receiver, account);
+        insertActionTrace(obj.globalSeq, std::move(s), actionType, receiver, account);
     }
     for (const auto& obj : blocks)
     {
@@ -339,6 +330,8 @@ void CassandraClient::prepareStatements()
         " (account_name, shard_id) VALUES(?, ?)";
     std::string insertDateActionTraceQuery = "INSERT INTO " + date_action_trace_table +
         " (global_seq, block_date, block_time) VALUES(?, ?, ?)";
+    std::string insertActionTraceQuery = "INSERT INTO " + action_trace_table +
+        " (part_key, global_seq, doc, action_type, receiver, account) VALUES(?, ?, ?, ?, ?, ?)";
     std::string insertBlockQuery = "INSERT INTO " + block_table +
         " (id, block_num, doc) VALUES(?, ?, ?)";
     std::string insertIrreversibleBlockQuery = "INSERT INTO " + block_table +
@@ -373,6 +366,7 @@ void CassandraClient::prepareStatements()
     ok &= prepare(insertAccountActionTraceQuery,           &gPreparedInsertAccountActionTrace_);
     ok &= prepare(insertAccountActionTraceShardQuery,      &gPreparedInsertAccountActionTraceShard_);
     ok &= prepare(insertDateActionTraceQuery,              &gPreparedInsertDateActionTrace_);
+    ok &= prepare(insertActionTraceQuery,                  &gPreparedInsertActionTrace_);
     ok &= prepare(insertBlockQuery,                        &gPreparedInsertBlock_);
     ok &= prepare(insertIrreversibleBlockQuery,            &gPreparedInsertIrreversibleBlock_);
     ok &= prepare(insertTransactionQuery,                  &gPreparedInsertTransaction_);
@@ -807,7 +801,7 @@ void CassandraClient::insertDateActionTrace(
 }
 
 void CassandraClient::insertActionTrace(
-    std::vector<cass_byte_t> globalSeq,
+    uint64_t globalSeq,
     std::string&& actionTrace,
     const std::string& actionType,
     const std::string& receiver,
@@ -820,7 +814,7 @@ void CassandraClient::insertActionTrace(
         std::lock_guard<std::mutex> lock(db_mtx);
 
         failed.create<eosio::insert_action_trace_object>([&]( auto& obj ) {
-            obj.setGlobalSeq(globalSeq);
+            obj.globalSeq = globalSeq;
             obj.actionTrace.resize(actionTrace.size());
             std::copy(actionTrace.begin(), actionTrace.end(),
                 obj.actionTrace.begin());
@@ -839,14 +833,15 @@ void CassandraClient::insertActionTrace(
     };
     exit_scope guard(f);
 
-    CassStatement* statement = cass_statement_new(insertActionTraceQuery.c_str(), 6);
+    CassStatement* statement = cass_prepared_bind(gPreparedInsertActionTrace_.get());
     auto gStatement = statement_guard(statement, cass_statement_free);
-    cass_statement_bind_bytes(statement, 0, globalSeq.data(), globalSeq.size());
-    cass_statement_bind_bytes(statement, 1, globalSeq.data(), globalSeq.size());
-    cass_statement_bind_string(statement, 2, actionTrace.c_str());
-    cass_statement_bind_string(statement, 3, actionType.c_str());
-    cass_statement_bind_string(statement, 4, receiver.c_str());
-    cass_statement_bind_string(statement, 5, account.c_str());
+    auto globalSeqBuf = num_to_bytes(globalSeq);
+    cass_statement_bind_int32_by_name(statement, "part_key", globalSeq / 100000000);
+    cass_statement_bind_bytes_by_name(statement, "global_seq", globalSeqBuf.data(), globalSeqBuf.size());
+    cass_statement_bind_string_by_name(statement, "doc", actionTrace.c_str());
+    cass_statement_bind_string_by_name(statement, "action_type", actionType.c_str());
+    cass_statement_bind_string_by_name(statement, "receiver", receiver.c_str());
+    cass_statement_bind_string_by_name(statement, "account", account.c_str());
 
     executeWait(std::move(gStatement), f);
 

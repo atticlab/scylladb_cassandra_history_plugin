@@ -34,31 +34,6 @@
 #include "ThreadPool/ThreadPool.h"
 
 
-template <typename T>
-std::vector<uint8_t> num_to_bytes(T num)
-{
-   static_assert(std::is_integral<T>::value, "num_to_bytes is only for integral types.");
-
-   std::vector<uint8_t> bytes;
-   bytes.reserve(sizeof(num));
-   for (int i = sizeof(num) - 1; i >= 0; --i)
-   {
-      uint8_t byte = (num >> 8 * i);
-      if (bytes.empty() && !byte)
-      {
-         continue;
-      }
-      if (std::is_unsigned<T>::value &&
-         bytes.empty() && byte & 0x80)
-      {
-         bytes.push_back(0x0);
-      }
-      bytes.push_back(byte & 0xFF);
-   }
-   return bytes;
-}
-
-
 namespace eosio {
    static appbase::abstract_plugin& _cassandra_history_plugin = app().register_plugin<cassandra_history_plugin>();
 
@@ -584,7 +559,7 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
          try {
             fc::variant doc = chain.to_variant_with_abi(atrace, abi_serializer_max_time_ms);
             auto json_atrace = fc::prune_invalid_utf8(fc::json::to_string(doc));
-            cas_client->insertActionTrace(global_seq_buffer, std::move(json_atrace),
+            cas_client->insertActionTrace(atrace.receipt->global_sequence, std::move(json_atrace),
                std::string(atrace.act.name), std::string(atrace.receiver), std::string(atrace.act.account));
          } catch (const std::exception& e) {
             elog("STD Exception from insertActionTrace ${e}", ("e", e.what()));
