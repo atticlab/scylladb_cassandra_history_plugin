@@ -136,8 +136,8 @@ class cassandra_history_plugin_impl {
    boost::mutex upsert_account_task_mtx;
 
    chain_plugin* chain_plug = nullptr;
-   boost::atomic<bool> done{false};
-   boost::atomic<bool> startup{true};
+   std::atomic_bool done{false};
+   std::atomic_bool startup{true};
    fc::optional<chain::chain_id_type> chain_id;
    fc::microseconds abi_serializer_max_time_ms;
 
@@ -605,10 +605,12 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
             if (parent_seq == 0) {
                fc::variant doc = chain.to_variant_with_abi(at, abi_serializer_max_time_ms);
                auto json_atrace = fc::prune_invalid_utf8(fc::json::to_string(doc));
-               cas_client->insertActionTrace(global_seq_buffer, std::move(json_atrace));
+               cas_client->insertActionTrace(global_seq_buffer, std::move(json_atrace),
+                  std::string(at.act.name), std::string(at.receipt.receiver), std::string(at.act.account));
             }
             else {
-               cas_client->insertActionTraceWithParent(global_seq_buffer, parent_seq_bytes);
+               cas_client->insertActionTraceWithParent(global_seq_buffer, parent_seq_bytes,
+                  std::string(at.act.name), std::string(at.receipt.receiver), std::string(at.act.account));
             }
          } catch (const std::exception& e) {
             elog("STD Exception from insertActionTrace ${e}", ("e", e.what()));

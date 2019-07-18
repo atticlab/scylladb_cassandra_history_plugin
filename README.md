@@ -82,7 +82,10 @@ cassandra-filter-out = eosblackdrop::
 1. Create file cmd.cqlsh.  
 ```plain
 USE eos_history;
-CREATE TABLE action_trace ( global_seq varint, parent varint, doc text, PRIMARY KEY(global_seq));
+CREATE TABLE action_trace (part_key int, global_seq varint, parent varint, doc text, action_type text, receiver text, account text, PRIMARY KEY (part_key, global_seq));
+CREATE MATERIALIZED VIEW action_trace_by_action_type AS SELECT * FROM action_trace
+    WHERE part_key IS NOT NULL AND global_seq IS NOT NULL AND action_type IS NOT NULL PRIMARY KEY ((part_key, action_type), global_seq);
+
 CREATE TABLE date_action_trace ( global_seq varint, block_date date, block_time timestamp, parent varint, PRIMARY KEY(block_date, block_time, global_seq));
 
 CREATE TABLE account_action_trace_shard ( account_name text, shard_id timestamp, PRIMARY KEY(account_name, shard_id));
