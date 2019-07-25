@@ -115,8 +115,6 @@ void CassandraClient::init()
             "PRIMARY KEY(block_date, block_time, global_seq));",
         "CREATE TABLE " + action_trace_table +
             " (part_key int, global_seq varint, parent varint, doc text, action_type text, receiver text, account text, PRIMARY KEY (part_key, global_seq));",
-        "CREATE MATERIALIZED VIEW action_trace_by_action_type AS SELECT * FROM action_trace "
-            "WHERE part_key IS NOT NULL AND global_seq IS NOT NULL AND action_type IS NOT NULL PRIMARY KEY ((part_key,action_type), global_seq);",
         "CREATE TABLE " + account_action_trace_shard_table + " ( account_name text, shard_id timestamp, PRIMARY KEY(account_name, shard_id));",
         "CREATE TABLE " + account_action_trace_table + " (shard_id timestamp, account_name text, global_seq varint, block_time timestamp, parent varint, "
             "PRIMARY KEY((account_name, shard_id), block_time, global_seq));",
