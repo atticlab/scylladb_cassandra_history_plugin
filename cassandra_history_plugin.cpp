@@ -4,6 +4,7 @@
  */
 #include <eosio/cassandra_history_plugin/cassandra_history_plugin.hpp>
 #include <eosio/cassandra_history_plugin/account_action_trace_shard_object.hpp>
+#include <eosio/cassandra_history_plugin/reversible_block_traces_object.hpp>
 #include <eosio/chain/config.hpp>
 #include <eosio/chain/exceptions.hpp>
 #include <eosio/chain/transaction.hpp>
@@ -123,7 +124,8 @@ class cassandra_history_plugin_impl {
    fc::optional<chain::chain_id_type> chain_id;
    fc::microseconds abi_serializer_max_time_ms;
 
-   std::unique_ptr<chainbase::database> db;
+   std::unique_ptr<chainbase::database> db; //shard db
+   std::unique_ptr<chainbase::database> reversible_db;
    std::unique_ptr<CassandraClient> cas_client;
 
    size_t max_task_queue_size = 0;
@@ -221,9 +223,34 @@ cassandra_history_plugin_impl::~cassandra_history_plugin_impl()
          elog( "Exception on cassandra_history_plugin shutdown of consume thread: ${e}", ("e", e.what()));
       }
    }
+   for (auto it = reversible.begin(); it != reversible.end(); it++) {
+      if (it->second.commited) {
+         reversible_db->create<eosio::reversible_block_traces_object>([&](auto &obj) {
+            obj.blockNum = it->first;
+            obj.traces.resize(fc::raw::pack_size(it->second.traces));
+            fc::datastream<char *> ds(obj.traces.data(), obj.traces.size());
+            fc::raw::pack(ds, it->second.traces);
+         });
+      }
+   }
 }
 
 void cassandra_history_plugin_impl::init() {
+   const auto& reversibleBlockTracesIdx = reversible_db->get_index<eosio::reversible_block_traces_multi_index, eosio::by_block_num>();
+   while(!reversibleBlockTracesIdx.empty()) {
+      auto it = reversibleBlockTracesIdx.begin();
+      std::vector<chain::transaction_trace_ptr> traces;
+      fc::datastream<const char*> ds( it->traces.data(), it->traces.size() );
+      fc::raw::unpack( ds, traces );
+      block_traces bt {
+         .traces = traces,
+         .commited = true
+      };
+      reversible.insert(std::pair<uint32_t, block_traces>(it->blockNum, bt));
+
+      reversible_db->remove(*it);
+   }
+
    ilog("starting consume thread");
    consume_thread = std::thread([this] { consume_blocks(); });
 
@@ -786,6 +813,8 @@ void cassandra_history_plugin::set_program_options(options_description&, options
           "The size of the data processing thread pool.")
          ("cassandra-shard-db-size-mb", bpo::value<size_t>()->default_value(512),
           "Maximum size(megabytes) of the shard database.")
+         ("cassandra-reversible-db-size-mb", bpo::value<size_t>()->default_value(2048),
+          "Maximum size(megabytes) of the reversible database.")
          ;
 }
 
@@ -846,6 +875,7 @@ void cassandra_history_plugin::plugin_initialize(const variables_map& options) {
             dropKeyspace = true;
             fc::remove_all( app().data_dir() / "cass_shard" );
             fc::remove_all( app().data_dir() / "cass_failed" );
+            fc::remove_all( app().data_dir() / "cass_reversible" );
          }
          
          std::string url_str = options.at( "cassandra-url" ).as<std::string>();
@@ -860,6 +890,10 @@ void cassandra_history_plugin::plugin_initialize(const variables_map& options) {
          auto db_size = options.at("cassandra-shard-db-size-mb").as<size_t>();
          my->db.reset(new chainbase::database(app().data_dir() / "cass_shard", chain::database::read_write, db_size*1024*1024ll));
          my->db->add_index<account_action_trace_shard_multi_index>();
+
+         const auto reversible_db_size = options.at("cassandra-reversible-db-size-mb").as<size_t>();
+         my->reversible_db = std::make_unique<chainbase::database>(app().data_dir() / "cass_reversible", chain::database::read_write, reversible_db_size*1024*1024ll);
+         my->reversible_db->add_index<reversible_block_traces_multi_index>();
 
          if( options.count( "cassandra-queue-size" )) {
             my->max_queue_size = options.at( "cassandra-queue-size" ).as<uint32_t>();
