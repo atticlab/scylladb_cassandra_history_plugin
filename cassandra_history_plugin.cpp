@@ -423,7 +423,15 @@ void cassandra_history_plugin_impl::on_applied_irreversible_block( const chain::
          }
       }
 
+      bool need_clean = (it != reversible.begin());
       reversible.erase(it);
+      if (need_clean) {
+         auto toDelete = reversible.begin();
+         while (toDelete != reversible.end() && toDelete->first <= bs->block_num) {
+            reversible.erase(toDelete);
+            toDelete = reversible.begin();
+         }
+      }
    }
 
    try {
