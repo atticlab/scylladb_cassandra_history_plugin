@@ -22,6 +22,7 @@
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -87,6 +88,12 @@ class cassandra_history_plugin_impl {
    bool filter_include( const transaction& trx ) const;
 
    void init();
+
+   struct block_traces {
+      bool commited = false;
+      std::vector<chain::transaction_trace_ptr> traces;
+   };
+   std::map<uint32_t, block_traces> reversible;
 
    uint32_t start_block_num = 0;
    std::atomic_bool start_block_reached{false};
@@ -351,6 +358,11 @@ void cassandra_history_plugin_impl::queue( Queue& queue, const Entry& e ) {
 
 
 void cassandra_history_plugin_impl::on_accepted_block( const chain::block_state_ptr& bs ) {
+   auto it = reversible.find(bs->block_num);
+   if (it != reversible.end()) {
+      it->second.commited = true;
+   }
+
    try {
       if( !start_block_reached ) {
          if( bs->block_num >= start_block_num ) {
@@ -370,6 +382,23 @@ void cassandra_history_plugin_impl::on_accepted_block( const chain::block_state_
 }
 
 void cassandra_history_plugin_impl::on_applied_irreversible_block( const chain::block_state_ptr& bs ) {
+   auto it = reversible.find(bs->block_num);
+   if (it != reversible.end()) {
+      for (const auto& t: it->second.traces) {
+         try {
+            queue( transaction_trace_queue, t );
+         } catch (fc::exception& e) {
+            elog("FC Exception while applied_transaction ${e}", ("e", e.to_string()));
+         } catch (std::exception& e) {
+            elog("STD Exception while applied_transaction ${e}", ("e", e.what()));
+         } catch (...) {
+            elog("Unknown exception while applied_transaction");
+         }
+      }
+
+      reversible.erase(it);
+   }
+
    try {
       if( start_block_reached ) {
          queue( irreversible_block_state_queue, bs );
@@ -398,21 +427,23 @@ void cassandra_history_plugin_impl::on_accepted_transaction( const chain::transa
 }
 
 void cassandra_history_plugin_impl::on_applied_transaction( const chain::transaction_trace_ptr& t ) {
-   try {
-      if( !t->producer_block_id.valid() ||
-         !t->receipt || (t->receipt->status != chain::transaction_receipt_header::executed &&
-            t->receipt->status != chain::transaction_receipt_header::soft_fail) )
-         return;
+   if( !t->producer_block_id.valid() ||
+       !t->receipt || (t->receipt->status != chain::transaction_receipt_header::executed &&
+                       t->receipt->status != chain::transaction_receipt_header::soft_fail) )
+      return;
 
-      if( start_block_reached ) {
-         queue( transaction_trace_queue, t );
+
+   if( !start_block_reached ) {
+      if( t->block_num >= start_block_num ) {
+         start_block_reached = true;
       }
-   } catch (fc::exception& e) {
-      elog("FC Exception while applied_transaction ${e}", ("e", e.to_string()));
-   } catch (std::exception& e) {
-      elog("STD Exception while applied_transaction ${e}", ("e", e.what()));
-   } catch (...) {
-      elog("Unknown exception while applied_transaction");
+   }
+   if( start_block_reached ) {
+      auto[block_it, success] = reversible.insert(std::pair<uint32_t, block_traces>(t->block_num, block_traces{}));
+      if (block_it->second.commited) {
+         block_it->second = block_traces{};
+      }
+      block_it->second.traces.push_back(t);
    }
 }
 
