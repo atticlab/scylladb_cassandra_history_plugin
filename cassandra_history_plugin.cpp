@@ -662,10 +662,24 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
             appbase::app().quit();
          }
 
+         double total_time = 0.0;
+         double max_time = 0.0;
          for (auto& f : traceInserts)
          {
+            auto start = std::chrono::high_resolution_clock::now();
             f();
+            auto finish = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed = finish - start;
+            total_time += elapsed.count();
+            if (elapsed.count() > max_time) {
+               max_time = elapsed.count();
+            }
+            if (elapsed.count() > 1.0) {
+               wlog("action trace insert took more than second");
+            }
          }
+         ilog("time info (${n} processed traces): total - ${total}s, avg - ${avg}s, max - ${max}s",
+            ("n", traceInserts.size())("total", total_time)("avg", total_time / traceInserts.size())("max", max_time));
          try {
             cas_client->batchInsertDateActionTrace(batchDateActionTrace);
          } catch (const std::exception& e) {
