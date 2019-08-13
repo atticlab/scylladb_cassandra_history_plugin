@@ -227,12 +227,14 @@ void cassandra_history_plugin_impl::init() {
 void cassandra_history_plugin_impl::check_task_queue_size() {
    auto task_queue_size = thread_pool->queue_size();
    if ( task_queue_size > max_task_queue_size ) {
-      task_queue_sleep_time += 10;
-      if( task_queue_sleep_time > 1000 )
-         wlog("thread pool task queue size: ${q}", ("q", task_queue_size));
-      std::this_thread::sleep_for( std::chrono::milliseconds( task_queue_sleep_time ));
+      while (thread_pool->queue_size() > max_task_queue_size) {
+         task_queue_sleep_time += 20;
+         if (task_queue_sleep_time > 1000)
+            wlog("thread pool task queue size: ${q}", ("q", task_queue_size));
+         std::this_thread::sleep_for(std::chrono::milliseconds(task_queue_sleep_time));
+      }
    } else {
-      task_queue_sleep_time -= 10;
+      task_queue_sleep_time -= 20;
       if( task_queue_sleep_time < 0 ) task_queue_sleep_time = 0;
    }
 }
@@ -333,15 +335,17 @@ void cassandra_history_plugin_impl::queue( Queue& queue, const Entry& e ) {
    std::unique_lock<std::mutex> lock( queue_mtx );
    auto queue_size = queue.size();
    if( queue_size > max_queue_size ) {
-      lock.unlock();
-      condition.notify_one();
-      queue_sleep_time += 10;
-      if( queue_sleep_time > 1000 )
-         wlog("queue size: ${q}", ("q", queue_size));
-      std::this_thread::sleep_for( std::chrono::milliseconds( queue_sleep_time ));
-      lock.lock();
+      while(queue.size() > max_queue_size) {
+         lock.unlock();
+         condition.notify_one();
+         queue_sleep_time += 20;
+         if (queue_sleep_time > 1000)
+            wlog("queue size: ${q}, sleep time: ${t}", ("q", queue.size())("t", queue_sleep_time));
+         std::this_thread::sleep_for(std::chrono::milliseconds(queue_sleep_time));
+         lock.lock();
+      }
    } else {
-      queue_sleep_time -= 10;
+      queue_sleep_time -= 20;
       if( queue_sleep_time < 0 ) queue_sleep_time = 0;
    }
    queue.emplace_back( e );
@@ -833,7 +837,7 @@ void cassandra_history_plugin::plugin_initialize(const variables_map& options) {
          if( options.count( "cassandra-queue-size" )) {
             my->max_queue_size = options.at( "cassandra-queue-size" ).as<uint32_t>();
          }
-         my->max_task_queue_size = my->max_queue_size * 8;
+         my->max_task_queue_size = my->max_queue_size * 2;
 
          size_t thr_pool_size = options.at( "cassandra-thread-pool-size" ).as<size_t>();
          ilog("init thread pool, size: ${tps}", ("tps", thr_pool_size));
