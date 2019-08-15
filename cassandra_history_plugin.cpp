@@ -88,6 +88,7 @@ class cassandra_history_plugin_impl {
 
    void init();
 
+   bool log_insert_time = false;
    bool log_head_block = false;
    std::chrono::time_point<std::chrono::system_clock> last_head_block_log_time;
    int head_log_interval = 4;
@@ -682,12 +683,11 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
             if (elapsed.count() > max_time) {
                max_time = elapsed.count();
             }
-            if (elapsed.count() > 1.0) {
-               wlog("action trace insert took more than second");
-            }
          }
-         ilog("time info (${n} processed traces): total - ${total}s, avg - ${avg}s, max - ${max}s",
-            ("n", traceInserts.size())("total", total_time)("avg", total_time / traceInserts.size())("max", max_time));
+         if (log_insert_time) {
+            ilog("time info (${n} processed traces): total - ${total}s, avg - ${avg}s, max - ${max}s",
+                 ("n", traceInserts.size())("total", total_time)("avg", total_time / traceInserts.size())("max", max_time));
+         }
          try {
             cas_client->batchInsertDateActionTrace(batchDateActionTrace);
          } catch (const std::exception& e) {
@@ -783,6 +783,8 @@ void cassandra_history_plugin::set_program_options(options_description&, options
           "Maximum size(megabytes) of the shard database.")
          ("cassandra-log-block-num", bpo::bool_switch()->default_value(false),
           "Log head block.")
+         ("cassandra-log-insert-time", bpo::bool_switch()->default_value(false),
+          "Log insert time.")
          ;
 }
 
@@ -791,6 +793,9 @@ void cassandra_history_plugin::plugin_initialize(const variables_map& options) {
       if( options.count( "cassandra-url" ) && options.count( "cassandra-keyspace" ) ) {
          ilog( "initializing cassandra_history_plugin" );
 
+         if( options.count( "cassandra-log-insert-time" )) {
+            my->log_insert_time = options.at( "cassandra-log-insert-time" ).as<bool>();
+         }
          if( options.count( "cassandra-log-block-num" )) {
             my->log_head_block = options.at( "cassandra-log-block-num" ).as<bool>();
             my->last_head_block_log_time = std::chrono::system_clock::now();
