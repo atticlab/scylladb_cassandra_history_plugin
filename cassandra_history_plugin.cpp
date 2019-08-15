@@ -88,6 +88,9 @@ class cassandra_history_plugin_impl {
 
    void init();
 
+   bool log_head_block = false;
+   std::chrono::time_point<std::chrono::system_clock> last_head_block_log_time;
+   int head_log_interval = 4;
    uint32_t start_block_num = 0;
    std::atomic_bool start_block_reached{false};
 
@@ -438,6 +441,11 @@ void cassandra_history_plugin_impl::process_accepted_block(chain::block_state_pt
          auto json_block = fc::prune_invalid_utf8(fc::json::to_string(bs_doc));
          try {
             cas_client->insertBlock(block_id_str, num_to_bytes(block_num), std::move(json_block), false);
+            auto now = std::chrono::system_clock::now();
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - last_head_block_log_time).count() > head_log_interval) {
+               ilog( "block_num: ${b}", ("b", block_num) );
+               last_head_block_log_time = now;
+            }
          } catch (const std::exception& e) {
             elog("STD Exception from insertBlock ${e}", ("e", e.what()));
             appbase::app().quit();
@@ -773,6 +781,8 @@ void cassandra_history_plugin::set_program_options(options_description&, options
           "The size of the data processing thread pool.")
          ("cassandra-shard-db-size-mb", bpo::value<size_t>()->default_value(512),
           "Maximum size(megabytes) of the shard database.")
+         ("cassandra-log-block-num", bpo::bool_switch()->default_value(false),
+          "Log head block.")
          ;
 }
 
@@ -781,6 +791,10 @@ void cassandra_history_plugin::plugin_initialize(const variables_map& options) {
       if( options.count( "cassandra-url" ) && options.count( "cassandra-keyspace" ) ) {
          ilog( "initializing cassandra_history_plugin" );
 
+         if( options.count( "cassandra-log-block-num" )) {
+            my->log_head_block = options.at( "cassandra-log-block-num" ).as<bool>();
+            my->last_head_block_log_time = std::chrono::system_clock::now();
+         }
          if( options.count( "cassandra-block-start" )) {
             my->start_block_num = options.at( "cassandra-block-start" ).as<uint32_t>();
          }
