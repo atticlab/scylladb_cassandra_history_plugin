@@ -426,9 +426,17 @@ void cassandra_history_plugin_impl::on_applied_transaction( const chain::transac
 
 
 void cassandra_history_plugin_impl::process_accepted_block(chain::block_state_ptr bs) {
+   auto start = std::chrono::high_resolution_clock::now();
+   fc::variant bs_doc(bs);
+   auto json_block = fc::prune_invalid_utf8(fc::json::to_string(bs_doc));
+   auto finish = std::chrono::high_resolution_clock::now();
+   std::chrono::duration<double> elapsed = finish - start;
+   if (elapsed.count() > 0.01) {
+      wlog("block serialization: ${t}", ("t", elapsed.count()));
+   }
    check_task_queue_size();
    thread_pool->enqueue(
-      [ bs{std::move(bs)}, this ]()
+      [ bs{std::move(bs)}, json_block{std::move(json_block)}, this ]() mutable
       {
          auto block_num = bs->block_num;
          if( block_num % 10000 == 0 )
@@ -438,8 +446,6 @@ void cassandra_history_plugin_impl::process_accepted_block(chain::block_state_pt
 
          const auto block_id = bs->id;
          const auto block_id_str = block_id.str();
-         fc::variant bs_doc(bs);
-         auto json_block = fc::prune_invalid_utf8(fc::json::to_string(bs_doc));
          try {
             cas_client->insertBlock(block_id_str, num_to_bytes(block_num), std::move(json_block), false);
             auto now = std::chrono::system_clock::now();
@@ -458,15 +464,15 @@ void cassandra_history_plugin_impl::process_accepted_block(chain::block_state_pt
 }
 
 void cassandra_history_plugin_impl::process_irreversible_block(chain::block_state_ptr bs) {
+   fc::variant bs_doc(bs);
+   auto json_block = fc::prune_invalid_utf8(fc::json::to_string(bs_doc));
    check_task_queue_size();
    thread_pool->enqueue(
-      [ bs{std::move(bs)}, this ]()
+      [ bs{std::move(bs)}, json_block{std::move(json_block)}, this ]() mutable
       {
          auto block_num = bs->block_num;
          const auto block_id = bs->id;
          const auto block_id_str = block_id.str();
-         fc::variant bs_doc(bs);
-         auto json_block = fc::prune_invalid_utf8(fc::json::to_string(bs_doc));
          try {
             cas_client->insertBlock(block_id_str, num_to_bytes(block_num), std::move(json_block), true);
          } catch (const std::exception& e) {
@@ -480,18 +486,19 @@ void cassandra_history_plugin_impl::process_irreversible_block(chain::block_stat
 }
 
 void cassandra_history_plugin_impl::process_accepted_transaction(chain::transaction_metadata_ptr t) {
+   const chain::signed_transaction& trx = t->packed_trx->get_signed_transaction();
+   if( !filter_include( trx ) ) return;
+
+   fc::variant trx_doc(trx);
+   auto json_trx = fc::prune_invalid_utf8(fc::json::to_string(trx_doc));
    check_task_queue_size();
    thread_pool->enqueue(
-      [ t{std::move(t)}, this ]()
+      [ t{std::move(t)}, json_trx{std::move(json_trx)}, this ]() mutable
       {
          const chain::signed_transaction& trx = t->packed_trx->get_signed_transaction();
-         if( !filter_include( trx ) ) return;
-
          const auto& trx_id = t->id;
          const auto trx_id_str = trx_id.str();
 
-         fc::variant trx_doc(trx);
-         auto json_trx = fc::prune_invalid_utf8(fc::json::to_string(trx_doc));
          try {
             cas_client->insertTransaction(trx_id_str, std::move(json_trx));
          } catch (const std::exception& e) {
@@ -567,11 +574,11 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
       auto global_seq_buffer = num_to_bytes(atrace.receipt->global_sequence);
 
       batchDateActionTrace.emplace_back(std::make_tuple(global_seq_buffer, block_time));
-      traceInserts.emplace_back([=, &chain, &atrace]()
+      fc::variant doc = chain.to_variant_with_abi(atrace, abi_serializer_max_time_ms);
+      auto json_atrace = fc::prune_invalid_utf8(fc::json::to_string(doc));
+      traceInserts.emplace_back([=, &atrace, json_atrace{std::move(json_atrace)}]() mutable
       {
          try {
-            fc::variant doc = chain.to_variant_with_abi(atrace, abi_serializer_max_time_ms);
-            auto json_atrace = fc::prune_invalid_utf8(fc::json::to_string(doc));
             cas_client->insertActionTrace(atrace.receipt->global_sequence, std::move(json_atrace),
                std::string(atrace.act.name), std::string(atrace.receiver), std::string(atrace.act.account));
          } catch (const std::exception& e) {
@@ -648,19 +655,25 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
       }
    }
 
+   auto start = std::chrono::high_resolution_clock::now();
+   fc::variant trx_trace_doc(t);
+   auto json_trx_trace = fc::prune_invalid_utf8(fc::json::to_string(trx_trace_doc));
+   auto finish = std::chrono::high_resolution_clock::now();
+   std::chrono::duration<double> elapsed = finish - start;
+   if (elapsed.count() > 0.03) {
+      wlog("transaction serialization: ${t}", ("t", elapsed.count()));
+   }
    check_task_queue_size();
    thread_pool->enqueue(
-      [ this, t{std::move(t)}, block_time,
+      [ this, t{std::move(t)}, json_trx_trace{std::move(json_trx_trace)}, block_time,
          batchDateActionTrace{std::move(batchDateActionTrace)},
          batchAccountTrace{std::move(batchAccountTrace)},
          traceInserts{std::move(traceInserts)},
-         actionTraceShardInserts{std::move(actionTraceShardInserts)} ]()
+         actionTraceShardInserts{std::move(actionTraceShardInserts)} ]() mutable
       {
          const auto trx_id = t->id;
          const auto trx_id_str = trx_id.str();
          auto block_num = t->block_num;
-         fc::variant trx_trace_doc(t);
-         auto json_trx_trace = fc::prune_invalid_utf8(fc::json::to_string(trx_trace_doc));
          try {
             cas_client->insertTransactionTrace(trx_id_str, num_to_bytes(block_num), block_time, std::move(json_trx_trace));
          } catch (const std::exception& e) {
