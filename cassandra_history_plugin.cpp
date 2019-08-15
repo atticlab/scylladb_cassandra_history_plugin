@@ -443,7 +443,7 @@ void cassandra_history_plugin_impl::process_accepted_block(chain::block_state_pt
          try {
             cas_client->insertBlock(block_id_str, num_to_bytes(block_num), std::move(json_block), false);
             auto now = std::chrono::system_clock::now();
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - last_head_block_log_time).count() > head_log_interval) {
+            if (log_head_block && std::chrono::duration_cast<std::chrono::seconds>(now - last_head_block_log_time).count() > head_log_interval) {
                ilog( "block_num: ${b}", ("b", block_num) );
                last_head_block_log_time = now;
             }
