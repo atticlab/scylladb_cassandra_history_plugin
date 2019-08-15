@@ -67,6 +67,7 @@ CassandraClient::CassandraClient(const std::string& hostUrl, const std::string& 
     cluster = cass_cluster_new();
     gCluster_.reset(cluster);
     cass_cluster_set_contact_points(cluster, hostUrl.c_str());
+    cass_cluster_set_num_threads_io(cluster, 4);
 
     session = cass_session_new();
     gSession_.reset(session);
