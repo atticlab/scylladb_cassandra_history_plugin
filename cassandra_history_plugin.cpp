@@ -671,6 +671,7 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
          traceInserts{std::move(traceInserts)},
          actionTraceShardInserts{std::move(actionTraceShardInserts)} ]() mutable
       {
+         auto start1 = std::chrono::high_resolution_clock::now();
          const auto trx_id = t->id;
          const auto trx_id_str = trx_id.str();
          auto block_num = t->block_num;
@@ -726,6 +727,9 @@ void cassandra_history_plugin_impl::process_applied_transaction(chain::transacti
          {
             f();
          }
+         auto finish1 = std::chrono::high_resolution_clock::now();
+         std::chrono::duration<double> elapsed = finish1 - start1;
+         ilog("process_applied_transaction time info: ${elapsed}s", ("elapsed", elapsed.count()));
       });
 }
 
