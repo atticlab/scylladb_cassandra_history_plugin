@@ -965,67 +965,77 @@ void CassandraClient::clearFollowingShards(
         " where account_name=? and shard_id>?;";
     auto selectStatement = cass_statement_new(selectQuery.c_str(), 2);
     auto gStatement = statement_guard(selectStatement, cass_statement_free);
+    cass_statement_set_paging_size(selectStatement, 100);
     cass_statement_bind_string(selectStatement, 0, std::string(account).c_str());
     cass_statement_bind_int64(selectStatement, 1, prevShardId);
-    auto gFuture = execute(std::move(gStatement));
-    if (cass_future_error_code(gFuture.get()) != CASS_OK) {
-        elog("Failed to select shards: ${query}", ("query", selectQuery));
-        appbase::app().quit();
-        return;
-    }
-    const CassResult* result = cass_future_get_result(gFuture.get());
-    auto gResult = result_guard(result, cass_result_free);
-    if (result == nullptr) {
-        return;
-    }
 
-    auto rowCount = cass_result_row_count(result);
-    if (rowCount > 0) {
-        ilog("Deleting ${n} shards for ${acc}", ("n", rowCount)("acc", std::string(account)));
-        return;
-    }
-    cass_int64_t lastShardId = 0;
-    CassIterator* iterator = cass_iterator_from_result(result);
-    auto gIterator = iterator_guard(iterator, cass_iterator_free);
-    while (cass_iterator_next(iterator)) {
-        const CassRow* row = cass_iterator_get_row(iterator);
-        const CassValue* column1 = cass_row_get_column_by_name(row, "account_name");
-        const CassValue* column2 = cass_row_get_column_by_name(row, "shard_id");
+    cass_bool_t has_more_pages = cass_true;
+    while (has_more_pages) {
+       auto gFuture = execute(std::move(gStatement));
+       if (cass_future_error_code(gFuture.get()) != CASS_OK) {
+          elog("Failed to select shards: ${query}", ("query", selectQuery));
+          appbase::app().quit();
+          return;
+       }
+       const CassResult *result = cass_future_get_result(gFuture.get());
+       auto gResult = result_guard(result, cass_result_free);
+       if (result == nullptr) {
+          return;
+       }
 
-        const char* accountName;
-        size_t accountNameLength;
-        cass_value_get_string(column1, &accountName, &accountNameLength);
+       auto rowCount = cass_result_row_count(result);
+       if (rowCount > 0) {
+          ilog("Deleting ${n} shards for ${acc}", ("n", rowCount)("acc", std::string(account)));
+          return;
+       }
+       cass_int64_t lastShardId = 0;
+       CassIterator *iterator = cass_iterator_from_result(result);
+       auto gIterator = iterator_guard(iterator, cass_iterator_free);
+       while (cass_iterator_next(iterator)) {
+          const CassRow *row = cass_iterator_get_row(iterator);
+          const CassValue *column1 = cass_row_get_column_by_name(row, "account_name");
+          const CassValue *column2 = cass_row_get_column_by_name(row, "shard_id");
 
-        cass_int64_t shardId;
-        cass_value_get_int64(column2, &shardId);
-        lastShardId = shardId;
+          const char *accountName;
+          size_t accountNameLength;
+          cass_value_get_string(column1, &accountName, &accountNameLength);
 
-        std::string deleteShardQuery = "delete from " + account_action_trace_table +
-            " where account_name=? and shard_id=?;";
-        auto deleteShardStatement = cass_statement_new(deleteShardQuery.c_str(), 2);
-        gStatement = statement_guard(deleteShardStatement, cass_statement_free);
-        cass_statement_bind_string(deleteShardStatement, 0, accountName);
-        cass_statement_bind_int64(deleteShardStatement, 1, shardId);
-        gFuture = execute(std::move(gStatement));
-        if (cass_future_error_code(gFuture.get()) != CASS_OK) {
-            elog("Delete from shard failed: ${query}", ("query", deleteShardQuery));
-            appbase::app().quit();
-            return;
-        }
-    }
+          cass_int64_t shardId;
+          cass_value_get_int64(column2, &shardId);
+          lastShardId = shardId;
 
-    std::string deleteQuery = "delete from " + account_action_trace_shard_table +
-        " where account_name=? and shard_id>? and shard_id<=?;";
-    auto deleteStatement = cass_statement_new(deleteQuery.c_str(), 3);
-    gStatement = statement_guard(deleteStatement, cass_statement_free);
-    cass_statement_bind_string(deleteStatement, 0, std::string(account).c_str());
-    cass_statement_bind_int64(deleteStatement, 1, prevShardId);
-    cass_statement_bind_int64(deleteStatement, 2, lastShardId);
-    gFuture = execute(std::move(gStatement));
-    if (cass_future_error_code(gFuture.get()) != CASS_OK) {
-        elog("Delete shards failed: ${query}", ("query", deleteQuery));
-        appbase::app().quit();
-        return;
+          std::string deleteShardQuery = "delete from " + account_action_trace_table +
+                                         " where account_name=? and shard_id=?;";
+          auto deleteShardStatement = cass_statement_new(deleteShardQuery.c_str(), 2);
+          gStatement = statement_guard(deleteShardStatement, cass_statement_free);
+          cass_statement_bind_string(deleteShardStatement, 0, accountName);
+          cass_statement_bind_int64(deleteShardStatement, 1, shardId);
+          gFuture = execute(std::move(gStatement));
+          if (cass_future_error_code(gFuture.get()) != CASS_OK) {
+             elog("Delete from shard failed: ${query}", ("query", deleteShardQuery));
+             appbase::app().quit();
+             return;
+          }
+       }
+
+       std::string deleteQuery = "delete from " + account_action_trace_shard_table +
+                                 " where account_name=? and shard_id>? and shard_id<=?;";
+       auto deleteStatement = cass_statement_new(deleteQuery.c_str(), 3);
+       gStatement = statement_guard(deleteStatement, cass_statement_free);
+       cass_statement_bind_string(deleteStatement, 0, std::string(account).c_str());
+       cass_statement_bind_int64(deleteStatement, 1, prevShardId);
+       cass_statement_bind_int64(deleteStatement, 2, lastShardId);
+       gFuture = execute(std::move(gStatement));
+       if (cass_future_error_code(gFuture.get()) != CASS_OK) {
+          elog("Delete shards failed: ${query}", ("query", deleteQuery));
+          appbase::app().quit();
+          return;
+       }
+
+       has_more_pages = cass_result_has_more_pages(result);
+       if (has_more_pages) {
+          cass_statement_set_paging_state(selectStatement, result);
+       }
     }
 }
 
